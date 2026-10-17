@@ -1,0 +1,22 @@
+[Unit]
+Description=Jinpin Hui website
+After=network.target
+
+[Service]
+Type=simple
+User=jinpinhui
+Group=jinpinhui
+WorkingDirectory=/srv/jinpinhui/site
+Environment=HOST=127.0.0.1
+Environment=PORT=4173
+Environment=SITE_URL=https://example.com
+# 首次设置后台时另行安全配置 ADMIN_SETUP_KEY，完成后可移除。
+ExecStart=/usr/bin/node /srv/jinpinhui/site/server.mjs
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/srv/jinpinhui/site/data
+
+[Install]
+WantedBy=multi-user.target
