@@ -14,7 +14,7 @@ node server.mjs
 
 ## 腾讯云服务器部署
 
-源码保存在 GitHub 私有仓库，网站实际运行在腾讯云中国内地服务器上。服务器使用 Node.js 20 或更高版本运行 `server.mjs`，并由 Nginx 反向代理。无需宝塔，也无需安装 npm 依赖。具体配置见 [deploy/tencent-cloud.md](deploy/tencent-cloud.md)。
+源码保存在 GitHub 仓库，网站实际运行在腾讯云中国内地服务器上。服务器使用 Node.js 20 或更高版本运行 `server.mjs`，并由 Nginx 反向代理。无需宝塔，也无需安装 npm 依赖。具体配置见 [deploy/tencent-cloud.md](deploy/tencent-cloud.md)。
 
 正式对外开放前，应完成对应域名的 ICP 备案，并核对授权身份、统计数字、联系方式和案例资料。备案号取得后替换页脚占位文字。
 
