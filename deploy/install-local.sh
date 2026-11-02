@@ -8,7 +8,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-for tool in curl tar node systemctl useradd; do
+for tool in curl tar node systemctl useradd flock; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required command: $tool. No site files were changed." >&2
     exit 1
@@ -53,6 +53,10 @@ if [[ ! -f "$source_dir/server.mjs" || ! -f "$source_dir/data/content.json" ]]; 
   exit 1
 fi
 
+node --check "$source_dir/server.mjs"
+bash -n "$source_dir/deploy/sync-github.sh"
+bash -n "$source_dir/deploy/enable-sync.sh"
+
 if ! id -u jinpinhui >/dev/null 2>&1; then
   useradd --system --shell /bin/false --home-dir /srv/jinpinhui jinpinhui
 fi
@@ -68,6 +72,7 @@ touch "$site_dir/.jinpinhui-managed"
 chown -R jinpinhui:jinpinhui "$site_dir"
 
 node_path="$(command -v node)"
+if [[ ! -e "$unit_path" ]]; then
 cat > "$unit_path" <<UNIT
 [Unit]
 Description=Jinpin Hui website
@@ -91,6 +96,7 @@ ReadWritePaths=$site_dir/data
 [Install]
 WantedBy=multi-user.target
 UNIT
+fi
 
 systemctl daemon-reload
 systemctl enable "$service_name" >/dev/null
@@ -105,6 +111,8 @@ if [[ "$status" != '200' ]]; then
   journalctl -u "$service_name" -n 40 --no-pager >&2 || true
   exit 1
 fi
+
+bash "$source_dir/deploy/enable-sync.sh"
 
 echo 'Jinpin Hui website installed successfully.'
 echo 'Local check: HTTP 200 at http://127.0.0.1:4173/'
