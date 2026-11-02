@@ -4,3 +4,4 @@ data/leads.json
 data/*.tmp
 .env
 *.log
+work/
