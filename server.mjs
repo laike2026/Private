@@ -21,6 +21,10 @@ const address = '江西省南昌市青山湖区湖坊镇江南云港数字经济
 const contactPhone = '18942233324';
 const articleKeyDigest = process.env.ARTICLE_WEBHOOK_KEY_SHA256 || '9b0180cd14ae3340d2547f96e6df7b15bf5054af7314f2dcd28130f0f340d24f';
 const articleAttempts = new Map();
+const searchSettingsFile = path.join(dataDir, 'search-settings.json');
+const searchStateFile = path.join(dataDir, 'search-state.json');
+const sourceRevision = crypto.createHash('sha256').update(fs.readFileSync(fileURLToPath(import.meta.url))).digest('hex');
+let searchSubmitting = false;
 
 fs.mkdirSync(dataDir, { recursive: true });
 const seed = {
@@ -48,6 +52,113 @@ function contactAllowed(req) { const ip = String(req.headers['x-real-ip'] || req
 function posts(type) { return readJson(contentFile, seed).posts.filter(item => item.type === type).sort((a, b) => b.date.localeCompare(a.date)); }
 function allPosts() { return readJson(contentFile, seed).posts; }
 function articleUrl(item) { return `/${item.type}/${slug(item.slug)}`; }
+
+// Only canonical, public pages are eligible. The queue is derived from durable content
+// and successful fingerprints, so a restart or GitHub update cannot lose new URLs.
+function searchPages(type = '') {
+  const items = allPosts().filter(x => ['news','blog'].includes(x.type)).sort((a,b) => b.date.localeCompare(a.date));
+  const fixed = ['/', '/services', ...services.map(x=>`/services/${x.id}`), '/platform-guide', '/faq', '/industries', ...industries.map(x=>`/industries/${x.id}`), '/cases', '/news', '/blog', '/about', '/contact'];
+  const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+  const today = new Intl.DateTimeFormat('sv-SE', {timeZone:'Asia/Shanghai'}).format(new Date());
+  const result = items.filter(x => !type || x.type === type).map(x => {
+    const modified = String(x.updatedAt || x.date || '').slice(0,10);
+    return {url:url(articleUrl(x)), fingerprint:hash(JSON.stringify(x)), lastmod:/^\d{4}-\d{2}-\d{2}$/.test(modified) && modified <= today ? modified : ''};
+  });
+  if (!type) result.push(...fixed.map(p => ({url:url(p), fingerprint:hash(sourceRevision+p), lastmod:''})));
+  return [...new Map(result.map(x=>[x.url,x])).values()];
+}
+function searchSettings() {
+  const saved = readJson(searchSettingsFile, {});
+  return {baiduToken:process.env.BAIDU_PUSH_TOKEN || saved.baiduToken || '', baiduEnabled:saved.baiduEnabled === true, soVerification:saved.soVerification || ''};
+}
+function searchState() { return {submitted:{}, logs:[], retryAfter:0, ...readJson(searchStateFile,{})}; }
+function searchCsrf(req) { return crypto.createHmac('sha256',auth().secret).update('search-settings:'+(req.headers.cookie || '')).digest('hex'); }
+function searchXml(type = '') {
+  return `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${searchPages(type).map(x=>`<url><loc>${esc(x.url)}</loc>${x.lastmod?`<lastmod>${x.lastmod}</lastmod>`:''}</url>`).join('')}</urlset>`;
+}
+function nextSearchDay() { return Math.floor((Date.now()+8*3600000)/86400000)*86400000+86400000-8*3600000+60000; }
+async function flushSearchQueue() {
+  if (searchSubmitting) return;
+  const settings = searchSettings();
+  if (!settings.baiduEnabled || !settings.baiduToken) return;
+  const state = searchState();
+  if (state.retryAfter > Date.now()) return;
+  const batch = searchPages().filter(x=>state.submitted[x.url] !== x.fingerprint).slice(0,20);
+  if (!batch.length) return;
+  searchSubmitting = true;
+  let log = {time:new Date().toISOString(), sent:batch.length, accepted:0, status:'failed', message:'百度接口暂时不可用，将自动重试'};
+  let retryAfter = Date.now()+600000;
+  const accepted = [];
+  try {
+    const endpoint = new URL('https://data.zz.baidu.com/urls');
+    endpoint.searchParams.set('site',new URL(baseUrl).origin);
+    endpoint.searchParams.set('token',settings.baiduToken);
+    const response = await fetch(endpoint, {method:'POST', redirect:'error', headers:{'Content-Type':'text/plain; charset=utf-8'}, body:batch.map(x=>x.url).join('\n'), signal:AbortSignal.timeout(15000)});
+    const result = await response.json();
+    if (response.ok && !result.error && Number.isInteger(result.success) && result.success >= 0 && result.success <= batch.length) {
+      const rejected = new Set([...(Array.isArray(result.not_valid)?result.not_valid:[]), ...(Array.isArray(result.not_same_site)?result.not_same_site:[])]);
+      const valid = batch.filter(x=>!rejected.has(x.url));
+      // Never infer which URLs succeeded when a response only reports a partial count.
+      if (result.success === valid.length) accepted.push(...valid);
+      log = {...log, accepted:result.success, status:accepted.length===batch.length?'accepted':'partial', message:accepted.length===batch.length?'百度已接收提交（不代表已收录）':'百度部分接收，未确认的链接保留待重试'};
+      if (Number.isInteger(result.remain) && result.remain >= 0) log.remain = result.remain;
+      retryAfter = result.remain === 0 ? nextSearchDay() : Date.now()+(accepted.length===batch.length?60000:3600000);
+    } else {
+      const messages = {401:'百度 token 无效，请重新核对接口凭证',403:'百度拒绝提交，请核对站点权限和当天配额',404:'百度站点未验证，请先验证当前 HTTPS 主域名',400:'百度拒绝请求，请核对站点和链接格式'};
+      log.message = messages[result.error] || `百度接口返回异常（HTTP ${response.status}），稍后重试`;
+      retryAfter = result.error === 403 ? nextSearchDay() : Date.now()+3600000;
+    }
+  } catch { /* Do not log the request URL: it contains the private token. */ }
+  try {
+    const current = searchSettings();
+    if (current.baiduToken !== settings.baiduToken || !current.baiduEnabled) return;
+    const latest = searchState();
+    const pages = new Map(searchPages().map(x=>[x.url,x]));
+    latest.submitted = Object.fromEntries(Object.entries(latest.submitted).filter(([u])=>pages.has(u)));
+    for (const item of accepted) if (pages.get(item.url)?.fingerprint === item.fingerprint) latest.submitted[item.url] = item.fingerprint;
+    latest.logs = [log,...latest.logs].slice(0,50);
+    latest.retryAfter = retryAfter;
+    writeJson(searchStateFile,latest);
+  } finally { searchSubmitting = false; }
+}
+function scheduleSearchPush() { setTimeout(()=>flushSearchQueue().catch(()=>console.error('Search submission state could not be saved')),1000).unref(); }
+function saveSearchSettings(body) {
+  const saved = readJson(searchSettingsFile, {});
+  const credential = (body.get('baiduCredential') || '').trim();
+  let token = credential;
+  if (/^https?:/i.test(credential)) {
+    try {
+      const api = new URL(credential);
+      if (api.hostname !== 'data.zz.baidu.com' || api.pathname !== '/urls' || api.username || api.password || api.port) return '请使用百度普通收录提供的 data.zz.baidu.com/urls 接口地址';
+      if (new URL(api.searchParams.get('site')).origin !== new URL(baseUrl).origin) return '接口所属站点必须与网站当前 HTTPS 主域名一致，请在百度切换站点后复制';
+      token = api.searchParams.get('token') || '';
+    } catch { return '百度接口地址格式不正确，请复制完整接口地址'; }
+  }
+  if (credential && !/^[a-zA-Z0-9_-]{8,256}$/.test(token)) return '百度 token 格式不正确';
+  const verification = (body.get('soVerification') || '').trim();
+  let soVerification = verification;
+  if (verification.startsWith('<')) {
+    const attributes = Object.fromEntries([...verification.matchAll(/([a-z-]+)\s*=\s*["']([^"']+)["']/gi)].map(m=>[m[1].toLowerCase(),m[2]]));
+    if (attributes.name !== '360-site-verification') return '请粘贴 360 提供的 360-site-verification 标签';
+    soVerification = attributes.content || '';
+  }
+  if (verification && !/^[a-zA-Z0-9_-]{8,256}$/.test(soVerification)) return '360 站点验证码格式不正确';
+  if (credential) saved.baiduToken = token;
+  if (verification) saved.soVerification = soVerification;
+  saved.baiduEnabled = body.get('enabled') === 'yes';
+  if (saved.baiduEnabled && !(process.env.BAIDU_PUSH_TOKEN || saved.baiduToken)) return '请先填写百度接口地址或 token，再启用主动推送';
+  writeJson(searchSettingsFile,saved);
+  fs.chmodSync(searchSettingsFile,0o600);
+  const state = searchState(); state.retryAfter = 0; writeJson(searchStateFile,state);
+  scheduleSearchPush();
+  return '';
+}
+function adminSearch(req, notice = '') {
+  const config = searchSettings(), state = searchState(), pages = searchPages();
+  const pending = pages.filter(x=>state.submitted[x.url] !== x.fingerprint).length;
+  const configured = Boolean(config.baiduToken);
+  return adminFrame('搜索引擎接入', `<div class="admin-top"><div><a class="back-link" href="/admin">← 返回内容管理</a><h1>搜索引擎接入</h1><p>发布文章后自动更新站点地图；百度配置完成后自动提交新增及更新链接。</p></div></div>${notice?`<p class="form-alert">${esc(notice)}</p>`:''}<div class="admin-stats"><div><strong>${pages.length}</strong><span>可提交的公开页面</span></div><div><strong>${pending}</strong><span>百度待提交页面</span></div><div><strong>${config.baiduEnabled && configured?'已启用':'待配置'}</strong><span>百度主动推送</span></div></div><section class="search-panel"><h2>百度主动推送</h2><p>${configured?'已保存 token，页面不会显示密钥。':'尚未配置百度 token，目前未向百度发送 API 请求。'} 提交成功只表示百度已接收链接，收录与排名由搜索引擎决定。</p><p><a href="https://ziyuan.baidu.com/linksubmit/index?site=${encodeURIComponent(new URL(baseUrl).origin)}" target="_blank" rel="noopener noreferrer">打开百度普通收录 → API 提交 ↗</a></p><form class="admin-form" method="post" action="/admin/seo/settings"><input type="hidden" name="csrf" value="${searchCsrf(req)}"><label class="full">百度接口地址或 token（留空保留原值）<input type="password" name="baiduCredential" autocomplete="off" maxlength="2048" placeholder="从百度普通收录页面复制完整接口地址"></label><label class="full">主动推送<select name="enabled"><option value="no" ${!config.baiduEnabled?'selected':''}>暂停</option><option value="yes" ${config.baiduEnabled?'selected':''}>启用</option></select></label><label class="full">360 站点验证标签或验证码（留空保留原值）<input name="soVerification" autocomplete="off" maxlength="512" placeholder="粘贴 360 提供的 meta 验证标签"></label><button class="button button-primary">保存配置</button></form><form method="post" action="/admin/seo/submit"><input type="hidden" name="csrf" value="${searchCsrf(req)}"><button class="button button-light" ${!config.baiduEnabled||!configured?'disabled':''}>提交待处理链接</button></form></section><section class="search-panel"><h2>搜狗与 360</h2><p>搜狗：已有验证标签及文件。请在搜狗平台确认站点验证结果，使用下方链接清单提交页面链接；资源收录输入框不接受 sitemap 文件地址。</p><p>360：${config.soVerification?'已配置验证标签，需到 360 平台完成验证。':'等待站点专属验证标签。'} 旧版自动收录 JS 已下线，请通过站长平台提交站点地图。</p><p><a href="https://zhanzhang.sogou.com/index.php/sitelink/index" target="_blank" rel="noopener noreferrer">搜狗资源收录 ↗</a> · <a href="https://zhanzhang.so.com/?m=Sitemap" target="_blank" rel="noopener noreferrer">360 站点地图提交 ↗</a></p><p>全站地图：<a href="/sitemap.xml">${esc(url('/sitemap.xml'))}</a><br>纯链接清单：<a href="/sitemap.txt">${esc(url('/sitemap.txt'))}</a></p><label>复制下面的页面链接到站长平台<textarea class="search-urls" readonly rows="8">${esc(pages.map(x=>x.url).join('\n'))}</textarea></label></section><section class="search-panel"><h2>百度提交记录</h2>${state.logs.length?state.logs.map(x=>`<p><time>${esc(x.time)}</time> · 发送 ${x.sent} 条 / 接收 ${x.accepted} 条${Number.isInteger(x.remain)?` / 剩余配额 ${x.remain}`:''}<br>${esc(x.message)}</p>`).join(''):'<p>暂无 API 提交记录。</p>'}</section>`,true);
+}
 
 function httpUrl(value) {
   if (!value || /[\u0000-\u0020<>]/.test(value)) return '';
@@ -95,15 +206,15 @@ async function articleWebhook(req,res) {
     const fingerprint=crypto.createHash('sha256').update(JSON.stringify([type,title,body,authorId,imageUrl])).digest('hex');
     const data=JSON.parse(fs.readFileSync(contentFile,'utf8'));if(!Array.isArray(data.posts)) throw new Error('网站文章数据格式异常，请联系管理员');
     if(data.posts.some(x=>x.webhookFingerprint===fingerprint)) return reply(1,'发布成功');
-    const id=crypto.randomUUID();data.posts.unshift({id,type,slug:`api-${id}`,title,summary:text.slice(0,180),date:new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date()),body,format:'html',authorId,authorName:['','admin','1'].includes(authorId)?'金品汇编辑部':authorId,imageUrl,webhookFingerprint:fingerprint,source:'webhook'});
-    writeJson(contentFile,data);return reply(1,'发布成功');
+    const id=crypto.randomUUID();data.posts.unshift({id,type,slug:`api-${id}`,title,summary:text.slice(0,180),date:new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date()),body,updatedAt:new Date().toISOString(),format:'html',authorId,authorName:['','admin','1'].includes(authorId)?'金品汇编辑部':authorId,imageUrl,webhookFingerprint:fingerprint,source:'webhook'});
+    writeJson(contentFile,data);scheduleSearchPush();return reply(1,'发布成功');
   }catch(error){return reply(0,['请求内容不能超过 1MB','网站文章数据格式异常，请联系管理员'].includes(error.message)?error.message:'发布失败，请检查请求或联系网站管理员');}
 }
 
 const nav = [ ['/', '首页'], ['/services', '服务方案'], ['/platform-guide', '平台指南'], ['/industries', '行业方案'], ['/cases', '客户案例'], ['/news', '新闻中心'], ['/blog', '出海博客'], ['/about', '关于金品汇'] ];
 function header(active = '') { return `<div class="topline"><div class="container topline-inner"><span>阿里巴巴国际站江西本地服务商</span><span>扎根南昌 · 服务江西制造</span></div></div><header class="site-header"><div class="container header-inner"><a class="brand" href="/" aria-label="金品汇首页"><img class="brand-logo" src="/assets/jinpin-logo.png" alt="金品汇 Logo"></a><button class="menu-toggle" aria-label="打开导航" aria-expanded="false" type="button">☰</button><nav class="main-nav" aria-label="主导航">${nav.map(([href, label]) => `<a href="${href}" class="${active === href ? 'current' : ''}">${label}</a>`).join('')}<a class="nav-cta" href="/contact">预约出海诊断 <span>↗</span></a></nav></div></header>`; }
 function footer() { return `<footer class="footer"><div class="container footer-main"><div class="footer-brand"><div class="footer-title">金品汇 <span>JINPINHUI</span></div><p>让更多中小企业轻松做全球生意。</p><div class="footer-contact-details"><span class="footer-contact-label">联系电话</span><a class="footer-phone" href="tel:+86${contactPhone}">${contactPhone}</a><p class="footer-address"><span>办公地址</span>${address}</p></div></div><div><h4>服务方案</h4><a href="/services/platform">平台入驻</a><a href="/services/growth">运营增长</a><a href="/services/talent">人才赋能</a><a href="/services/supply">供应链配套</a></div><div><h4>探索更多</h4><a href="/industries">行业方案</a><a href="/cases">客户案例</a><a href="/news">新闻中心</a><a href="/blog">出海博客</a><a href="/platform-guide">平台与本地服务</a><a href="/faq">常见问题</a></div><div><h4>联系我们</h4><a href="/contact">预约出海诊断</a><a href="/about">关于金品汇</a><a href="/privacy">隐私说明</a></div></div><div class="container footer-bottom"><span>© ${new Date().getFullYear()} ${company}</span><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026019255号-3</a></div></footer>`; }
-function page({ title, description, active = '', body, canonical = '/', schema = '' }) { return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="baidu-site-verification" content="codeva-FtStjRLa1g" /><meta name="sogou_site_verification" content="o0vPkQMrLs" /><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="${esc(description)}"><meta name="theme-color" content="#ff6a00"><link rel="canonical" href="${esc(url(canonical))}"><link rel="icon" href="/assets/jinpin-logo.png"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:type" content="website"><meta property="og:image" content="${esc(url('/assets/hero-factory.png'))}"><title>${esc(title)}｜金品汇</title><link rel="stylesheet" href="/styles.css?v=20261103-webhook">${schema}</head><body>${header(active)}<main>${body}</main>${footer()}<script src="/client.js" defer></script></body></html>`; }
+function page({ title, description, active = '', body, canonical = '/', schema = '' }) { return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="baidu-site-verification" content="codeva-FtStjRLa1g" /><meta name="sogou_site_verification" content="o0vPkQMrLs" />${/^[a-zA-Z0-9_-]{8,256}$/.test(searchSettings().soVerification)?`<meta name="360-site-verification" content="${esc(searchSettings().soVerification)}" />`:""}<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="${esc(description)}"><meta name="theme-color" content="#ff6a00"><link rel="canonical" href="${esc(url(canonical))}"><link rel="icon" href="/assets/jinpin-logo.png"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}"><meta property="og:type" content="website"><meta property="og:image" content="${esc(url('/assets/hero-factory.png'))}"><title>${esc(title)}｜金品汇</title><link rel="stylesheet" href="/styles.css?v=20261103-search">${schema}</head><body>${header(active)}<main>${body}</main>${footer()}<script src="/client.js" defer></script></body></html>`; }
 function orgSchema() { return `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'Organization', name: company, telephone: `+86-${contactPhone}`, url: url('/'), address: { '@type': 'PostalAddress', streetAddress: '湖坊镇江南云港数字经济产业园18幢1512', addressLocality: '南昌市', addressRegion: '江西省', addressCountry: 'CN' } })}</script>`; }
 function kicker(text) { return `<span class="kicker"><i></i>${text}</span>`; }
 function sectionTitle(eyebrow, title, description = '') { return `<div class="section-head">${kicker(eyebrow)}<h2>${title}</h2>${description ? `<p>${description}</p>` : ''}</div>`; }
@@ -157,7 +268,7 @@ function privacy() { return page({ title: '隐私说明', description: '了解�
 
 function auth() { return readJson(authFile, null); }
 function isLogged(req) { const a = auth(); if (!a) return false; const cookie = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jph_session=')); if (!cookie) return false; const [exp, sig] = cookie.slice(12).split('.'); if (!exp || !sig || Number(exp) < Date.now()) return false; const expected = crypto.createHmac('sha256', a.secret).update(exp).digest('hex'); return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); }
-function adminFrame(title, body, logged = false) { return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(title)}｜金品汇后台</title><link rel="stylesheet" href="/styles.css"></head><body class="admin-body"><header class="admin-header"><a href="/">金品汇官网 ↗</a><strong>内容管理</strong>${logged ? '<form method="post" action="/admin/logout"><button>退出登录</button></form>' : ''}</header><main class="admin-main">${body}</main></body></html>`; }
+function adminFrame(title, body, logged = false) { return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(title)}｜金品汇后台</title><link rel="stylesheet" href="/styles.css"></head><body class="admin-body"><header class="admin-header"><a href="/">金品汇官网 ↗</a><strong>内容管理</strong>${logged?'<a href="/admin/seo">搜索引擎接入</a>':''}${logged ? '<form method="post" action="/admin/logout"><button>退出登录</button></form>' : ''}</header><main class="admin-main">${body}</main></body></html>`; }
 function adminLogin(setup = false, error = false) { return adminFrame(setup ? '设置管理员密码' : '后台登录', `<div class="admin-auth"><span class="kicker"><i></i>CONTENT MANAGEMENT</span><h1>${setup ? '设置管理员密码' : '登录内容管理后台'}</h1><p>${setup ? '首次使用，请设置至少 12 位的管理员密码。' : '登录后可发布新闻和博客，并查看咨询信息。'}</p>${error ? '<p class="admin-error">部署密钥或密码不正确、两次输入不一致，或密码不符合要求，请重试。</p>' : ''}<form method="post" action="${setup ? '/admin/setup' : '/admin/login'}">${setup && publicDeployment ? '<label>部署密钥<input type="password" name="setupKey" required autocomplete="off"></label>' : ''}<label>管理员密码<input type="password" name="password" minlength="${setup ? 12 : 1}" required autocomplete="${setup ? 'new-password' : 'current-password'}"></label>${setup ? '<label>再次输入密码<input type="password" name="passwordConfirm" minlength="12" required autocomplete="new-password"></label>' : ''}<button class="button button-primary">${setup ? '完成设置' : '登录后台'} ↗</button></form></div>`); }
 function adminDashboard() { const items = allPosts(); const leads = readJson(leadsFile, []); return adminFrame('管理首页', `<div class="admin-top"><div><span class="kicker"><i></i>DASHBOARD</span><h1>内容管理</h1><p>新闻、博客和咨询信息保存在本地 data 文件夹。</p></div><a class="button button-primary" href="/admin/posts/new">发布文章 ↗</a></div><div class="admin-stats"><div><strong>${items.filter(x => x.type === 'news').length}</strong><span>新闻</span></div><div><strong>${items.filter(x => x.type === 'blog').length}</strong><span>博客</span></div><div><strong>${leads.length}</strong><span>咨询</span></div></div><div class="admin-tabs"><a class="current" href="/admin">文章管理</a><a href="/admin/leads">咨询信息</a></div><div class="admin-table">${items.sort((a,b) => b.date.localeCompare(a.date)).map(x => `<div><span>${x.type === 'news' ? '新闻' : '博客'}</span><a href="${articleUrl(x)}" target="_blank">${esc(x.title)}</a><small>${esc(x.date)}</small><a href="/admin/posts/${esc(x.id)}/edit">编辑</a><form method="post" action="/admin/posts/${esc(x.id)}/delete" onsubmit="return confirm('确认删除这篇文章？')"><button>删除</button></form></div>`).join('')}</div>`, true); }
 function adminPostForm(item = null, error = '') { return adminFrame(item ? '编辑文章' : '发布文章', `<div class="admin-top"><div><a href="/admin" class="back-link">← 返回内容管理</a><h1>${item ? '编辑文章' : '发布文章'}</h1></div></div>${error ? `<p class="admin-error">${esc(error)}</p>` : ''}<form class="admin-form" method="post" action="${item ? `/admin/posts/${esc(item.id)}/edit` : '/admin/posts/new'}"><label>栏目<select name="type"><option value="news" ${item?.type === 'news' ? 'selected' : ''}>新闻中心</option><option value="blog" ${item?.type === 'blog' ? 'selected' : ''}>出海博客</option></select></label><label>发布日期<input type="date" name="date" required value="${esc(item?.date || new Date().toISOString().slice(0,10))}"></label><label class="full">标题<input name="title" required maxlength="140" value="${esc(item?.title || '')}"></label><label class="full">摘要<textarea name="summary" rows="3" required maxlength="300">${esc(item?.summary || '')}</textarea></label><label class="full">正文（每行一个段落）<textarea name="body" rows="16" required maxlength="100000">${esc(item?.body || '')}</textarea></label><button class="button button-primary" type="submit">保存文章 ↗</button></form>`, true); }
@@ -170,8 +281,9 @@ const server = http.createServer(async (req, res) => {
     const parsed = new URL((req.url || '/').replace(/^\/+/, '/'), baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
     if (pathname === '/api/webhook/send_article' || (pathname === '/' && req.method === 'POST')) return await articleWebhook(req,res);
     if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(req, res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain'); }
-    if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8');
-    if (pathname === '/sitemap.xml') { const paths = ['/', '/services', ...services.map(x=>`/services/${x.id}`), '/platform-guide', '/faq', '/industries', ...industries.map(x=>`/industries/${x.id}`), '/cases', '/news', '/blog', '/about', '/contact', ...allPosts().map(articleUrl)]; return respond(res, 200, `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map(x => `<url><loc>${esc(url(x))}</loc></url>`).join('')}</urlset>`, 'application/xml; charset=utf-8'); }
+    if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8', {'Cache-Control':'no-cache'});
+    if (['/sitemap.xml','/news-sitemap.xml','/blog-sitemap.xml'].includes(pathname)) return respond(res,200,searchXml(pathname.startsWith('/news-')?'news':pathname.startsWith('/blog-')?'blog':''),'application/xml; charset=utf-8',{'Cache-Control':'no-cache'});
+    if (pathname === '/sitemap.txt') return respond(res,200,searchPages().map(x=>x.url).join('\n')+'\n','text/plain; charset=utf-8',{'Cache-Control':'no-cache'});
     if (req.method === 'POST') {
       if (!safeOrigin(req)) return respond(res, 403, 'Forbidden', 'text/plain');
       const body = await readBody(req);
@@ -179,14 +291,20 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/admin/setup' && !auth()) { const password = body.get('password') || ''; if ((publicDeployment && (!setupKey || setupKey !== body.get('setupKey'))) || password.length < 12 || password !== body.get('passwordConfirm')) return respond(res, 400, adminLogin(true, true)); const salt = crypto.randomBytes(24).toString('hex'), hash = crypto.scryptSync(password, salt, 64).toString('hex'); writeJson(authFile, { salt, hash, secret: crypto.randomBytes(32).toString('hex') }); return redirect(res, '/admin/login'); }
       if (pathname === '/admin/login') { const a = auth(); if (!a) return redirect(res, '/admin/setup'); const hash = crypto.scryptSync(body.get('password') || '', a.salt, 64).toString('hex'); if (hash.length !== a.hash.length || !crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(a.hash))) return respond(res, 401, adminLogin(false, true)); const exp = String(Date.now() + 7 * 86400000), sig = crypto.createHmac('sha256', a.secret).update(exp).digest('hex'); return respond(res, 303, '', 'text/plain', { Location: '/admin', 'Set-Cookie': `jph_session=${exp}.${sig}; Path=/admin; HttpOnly; SameSite=Lax${process.env.SITE_URL?.startsWith('https:') ? '; Secure' : ''}` }); }
       if (!isLogged(req)) return redirect(res, '/admin/login');
+      if (pathname === '/admin/seo/settings' || pathname === '/admin/seo/submit') {
+        if (body.get('csrf') !== searchCsrf(req)) return respond(res,403,'页面已过期，请刷新后再试','text/plain; charset=utf-8');
+        if (pathname.endsWith('/settings')) { const error = saveSearchSettings(body); if (error) return respond(res,400,adminSearch(req,error)); }
+        else scheduleSearchPush();
+        return redirect(res,'/admin/seo');
+      }
       if (pathname === '/admin/logout') return respond(res, 303, '', 'text/plain', { Location: '/admin/login', 'Set-Cookie': 'jph_session=; Path=/admin; Max-Age=0; HttpOnly; SameSite=Lax' });
       const edit = pathname.match(/^\/admin\/posts\/([^/]+)\/edit$/), del = pathname.match(/^\/admin\/posts\/([^/]+)\/delete$/);
-      if (pathname === '/admin/posts/new' || edit) { const data = readJson(contentFile, seed), existing = edit ? data.posts.find(x => x.id === edit[1]) : null; if (edit && !existing) return respond(res, 404, 'Not found', 'text/plain'); const item = { id: existing?.id || crypto.randomUUID(), slug: existing?.slug || crypto.randomBytes(5).toString('hex'), type: body.get('type') === 'blog' ? 'blog' : 'news', date: (body.get('date') || '').slice(0,10), title: (body.get('title') || '').trim().slice(0,140), summary: (body.get('summary') || '').trim().slice(0,300), body: (body.get('body') || '').trim().slice(0,100000) }; if (!item.title || !item.summary || !item.body || !/^\d{4}-\d{2}-\d{2}$/.test(item.date)) return respond(res, 400, adminPostForm(item, '请填写标题、摘要、正文和有效日期。')); if (existing) Object.assign(existing, item); else data.posts.unshift(item); writeJson(contentFile, data); return redirect(res, '/admin'); }
+      if (pathname === '/admin/posts/new' || edit) { const data = readJson(contentFile, seed), existing = edit ? data.posts.find(x => x.id === edit[1]) : null; if (edit && !existing) return respond(res, 404, 'Not found', 'text/plain'); const item = { id: existing?.id || crypto.randomUUID(), slug: existing?.slug || crypto.randomBytes(5).toString('hex'), type: body.get('type') === 'blog' ? 'blog' : 'news', date: (body.get('date') || '').slice(0,10), title: (body.get('title') || '').trim().slice(0,140), summary: (body.get('summary') || '').trim().slice(0,300), updatedAt:new Date().toISOString(), body: (body.get('body') || '').trim().slice(0,100000) }; if (!item.title || !item.summary || !item.body || !/^\d{4}-\d{2}-\d{2}$/.test(item.date)) return respond(res, 400, adminPostForm(item, '请填写标题、摘要、正文和有效日期。')); if (existing) Object.assign(existing, item); else data.posts.unshift(item); writeJson(contentFile, data); scheduleSearchPush(); return redirect(res, '/admin'); }
       if (del) { const data = readJson(contentFile, seed); data.posts = data.posts.filter(x => x.id !== del[1]); writeJson(contentFile, data); return redirect(res, '/admin'); }
       return respond(res, 404, 'Not found', 'text/plain');
     }
     if (req.method !== 'GET') return respond(res, 405, 'Method not allowed', 'text/plain');
-    if (pathname.startsWith('/admin')) { if (!auth()) { if (publicDeployment && !setupKey) return respond(res, 503, adminFrame('后台尚未启用', '<div class="admin-auth"><h1>后台尚未启用</h1><p>请网站管理员先在服务器上配置首次设置密钥。</p></div>')); return respond(res, 200, adminLogin(true)); } if (pathname === '/admin/login') return respond(res, 200, adminLogin()); if (!isLogged(req)) return redirect(res, '/admin/login'); if (pathname === '/admin') return respond(res, 200, adminDashboard()); if (pathname === '/admin/leads') return respond(res, 200, adminLeads()); if (pathname === '/admin/posts/new') return respond(res, 200, adminPostForm()); const edit = pathname.match(/^\/admin\/posts\/([^/]+)\/edit$/); if (edit) { const item = allPosts().find(x => x.id === edit[1]); return respond(res, item ? 200 : 404, item ? adminPostForm(item) : notFound()); } return respond(res, 404, notFound()); }
+    if (pathname.startsWith('/admin')) { if (!auth()) { if (publicDeployment && !setupKey) return respond(res, 503, adminFrame('后台尚未启用', '<div class="admin-auth"><h1>后台尚未启用</h1><p>请网站管理员先在服务器上配置首次设置密钥。</p></div>')); return respond(res, 200, adminLogin(true)); } if (pathname === '/admin/login') return respond(res, 200, adminLogin()); if (!isLogged(req)) return redirect(res, '/admin/login'); if (pathname === '/admin') return respond(res, 200, adminDashboard()); if (pathname === '/admin/seo') return respond(res,200,adminSearch(req)); if (pathname === '/admin/leads') return respond(res, 200, adminLeads()); if (pathname === '/admin/posts/new') return respond(res, 200, adminPostForm()); const edit = pathname.match(/^\/admin\/posts\/([^/]+)\/edit$/); if (edit) { const item = allPosts().find(x => x.id === edit[1]); return respond(res, item ? 200 : 404, item ? adminPostForm(item) : notFound()); } return respond(res, 404, notFound()); }
     if (pathname === '/') return respond(res, 200, home());
     if (pathname === '/services') return respond(res, 200, servicesPage());
     if (pathname === '/platform-guide') return respond(res, 200, platformGuide());
@@ -203,4 +321,5 @@ const server = http.createServer(async (req, res) => {
     return respond(res, 404, notFound());
   } catch (error) { console.error(error); if (!res.headersSent) respond(res, 500, '服务器暂时无法处理请求。', 'text/plain; charset=utf-8'); }
 });
-server.listen(port, host, () => console.log(`Local: http://${host}:${port}`));
+server.listen(port, host, () => { console.log(`Local: http://${host}:${port}`); scheduleSearchPush(); });
+setInterval(()=>flushSearchQueue().catch(()=>console.error('Search submission state could not be saved')),60000).unref();
