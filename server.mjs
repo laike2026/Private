@@ -181,7 +181,7 @@ const server = http.createServer(async (req, res) => {
     const parsed = new URL((req.url || '/').replace(/^\/+/, '/'), baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
     webhookTrace(req, pathname);
     if (pathname === '/api/webhook/diagnostics') return await articleWebhook(req,res,true);
-    if (pathname === '/api/webhook/send_article') return await articleWebhook(req,res);
+    if (pathname === '/api/webhook/send_article' || (pathname === '/' && req.method === 'POST')) return await articleWebhook(req,res);
     if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(req, res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain'); }
     if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8');
     if (pathname === '/sitemap.xml') { const paths = ['/', '/services', ...services.map(x=>`/services/${x.id}`), '/platform-guide', '/faq', '/industries', ...industries.map(x=>`/industries/${x.id}`), '/cases', '/news', '/blog', '/about', '/contact', ...allPosts().map(articleUrl)]; return respond(res, 200, `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map(x => `<url><loc>${esc(url(x))}</loc></url>`).join('')}</urlset>`, 'application/xml; charset=utf-8'); }
