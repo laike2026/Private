@@ -21,6 +21,14 @@ const address = '江西省南昌市青山湖区湖坊镇江南云港数字经济
 const contactPhone = '18942233324';
 const articleKeyDigest = process.env.ARTICLE_WEBHOOK_KEY_SHA256 || '9b0180cd14ae3340d2547f96e6df7b15bf5054af7314f2dcd28130f0f340d24f';
 const articleAttempts = new Map();
+const webhookDiagnostics = [];
+const webhookFieldNames = ['sign','class_id','title','content','author_id','image_url','api_key','apikey','token','action','key','username','password'];
+function webhookTrace(req, pathname) {
+  if(pathname==='/api/webhook/diagnostics') return;
+  if(!(pathname.startsWith('/api/')||pathname.endsWith('.php')||(req.method==='POST'&&pathname!=='/contact'&&!pathname.startsWith('/admin')))) return;
+  const event={time:new Date().toISOString(),method:req.method,path:pathname.slice(0,160).replace(/[A-Za-z0-9_-]{32,}/g,'[redacted]'),contentType:String(req.headers['content-type']||'').slice(0,80),fields:[]};
+  webhookDiagnostics.push(event);if(webhookDiagnostics.length>30)webhookDiagnostics.shift();req.webhookTrace=event;
+}
 
 fs.mkdirSync(dataDir, { recursive: true });
 const seed = {
@@ -69,8 +77,8 @@ function cleanArticleHtml(value) {
   }).join('');
 }
 function articleText(html) { return html.replace(/<[^>]*>/g,' ').replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g,' ').replace(/\s+/g,' ').trim(); }
-async function articleWebhook(req,res) {
-  const reply=(code,msg)=>respond(res,200,JSON.stringify({code,msg}),'application/json; charset=utf-8',{'Cache-Control':'no-store'});
+async function articleWebhook(req,res,diagnostics=false) {
+  const reply=(code,msg)=>{if(req.webhookTrace){req.webhookTrace.code=code;req.webhookTrace.msg=msg;}return respond(res,200,JSON.stringify({code,msg}),'application/json; charset=utf-8',{'Cache-Control':'no-store'});};
   if(req.method!=='POST') return reply(0,'请使用 POST 请求发布文章');
   const ip=String(req.headers['x-real-ip']||req.socket.remoteAddress); const now=Date.now();
   const rate=articleAttempts.get(ip); if(rate && now-rate.since<60000 && rate.count>=30) return reply(0,'请求过于频繁，请稍后重试');
@@ -81,8 +89,11 @@ async function articleWebhook(req,res) {
     const raw=await new Promise((resolve,reject)=>{let chunks=[],size=0;req.on('data',c=>{size+=c.length;if(size<=1048576)chunks.push(c);else chunks=[];});req.on('end',()=>size>1048576?reject(new Error('请求内容不能超过 1MB')):resolve(Buffer.concat(chunks).toString('utf8')));req.on('error',reject);});
     let input;try{input=mime==='application/json'?JSON.parse(raw):Object.fromEntries(new URLSearchParams(raw));}catch{return reply(0,'请求内容格式错误');}
     if(!input||typeof input!=='object'||Array.isArray(input)) return reply(0,'请求内容格式错误');
+    if(req.webhookTrace) req.webhookTrace.fields=webhookFieldNames.filter(name=>Object.hasOwn(input,name));
     const digest=crypto.createHash('sha256').update(typeof input.sign==='string'?input.sign:'').digest();
     if(!/^[a-f0-9]{64}$/i.test(articleKeyDigest)||!crypto.timingSafeEqual(digest,Buffer.from(articleKeyDigest,'hex'))) return reply(0,'秘钥错误');
+    if(req.webhookTrace)req.webhookTrace.authenticated=true;
+    if(diagnostics) return respond(res,200,JSON.stringify({code:1,msg:'诊断记录',data:webhookDiagnostics}),'application/json; charset=utf-8',{'Cache-Control':'no-store'});
     const classes={news:'news',blog:'blog','1':'news','2':'blog','31':'news'};
     const classId=String(input.class_id??'blog').trim();const type=Object.hasOwn(classes,classId)?classes[classId]:'';
     if(!type) return reply(0,'文章栏目无效，请使用 news 或 blog');
@@ -168,6 +179,8 @@ function staticFile(req, res, pathname) { const filepath = path.join(publicDir, 
 const server = http.createServer(async (req, res) => {
   try {
     const parsed = new URL((req.url || '/').replace(/^\/+/, '/'), baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
+    webhookTrace(req, pathname);
+    if (pathname === '/api/webhook/diagnostics') return await articleWebhook(req,res,true);
     if (pathname === '/api/webhook/send_article') return await articleWebhook(req,res);
     if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(req, res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain'); }
     if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8');
@@ -175,6 +188,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST') {
       if (!safeOrigin(req)) return respond(res, 403, 'Forbidden', 'text/plain');
       const body = await readBody(req);
+      if(req.webhookTrace)req.webhookTrace.fields=webhookFieldNames.filter(name=>body.has(name));
       if (pathname === '/contact') { if (body.get('website')) return redirect(res, '/contact?sent=success'); const name = (body.get('name') || '').trim(), phone = (body.get('phone') || '').trim(); if (!name || !phone || body.get('consent') !== 'yes') return redirect(res, '/contact?sent=error'); if (!contactAllowed(req)) return respond(res, 429, '提交过于频繁，请稍后重试。', 'text/plain; charset=utf-8'); const leads = readJson(leadsFile, []); leads.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), name: name.slice(0,60), phone: phone.slice(0,40), company: (body.get('company') || '').slice(0,100), interest: (body.get('interest') || '').slice(0,60), message: (body.get('message') || '').slice(0,1000) }); writeJson(leadsFile, leads); return redirect(res, '/contact?sent=success'); }
       if (pathname === '/admin/setup' && !auth()) { const password = body.get('password') || ''; if ((publicDeployment && (!setupKey || setupKey !== body.get('setupKey'))) || password.length < 12 || password !== body.get('passwordConfirm')) return respond(res, 400, adminLogin(true, true)); const salt = crypto.randomBytes(24).toString('hex'), hash = crypto.scryptSync(password, salt, 64).toString('hex'); writeJson(authFile, { salt, hash, secret: crypto.randomBytes(32).toString('hex') }); return redirect(res, '/admin/login'); }
       if (pathname === '/admin/login') { const a = auth(); if (!a) return redirect(res, '/admin/setup'); const hash = crypto.scryptSync(body.get('password') || '', a.salt, 64).toString('hex'); if (hash.length !== a.hash.length || !crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(a.hash))) return respond(res, 401, adminLogin(false, true)); const exp = String(Date.now() + 7 * 86400000), sig = crypto.createHmac('sha256', a.secret).update(exp).digest('hex'); return respond(res, 303, '', 'text/plain', { Location: '/admin', 'Set-Cookie': `jph_session=${exp}.${sig}; Path=/admin; HttpOnly; SameSite=Lax${process.env.SITE_URL?.startsWith('https:') ? '; Secure' : ''}` }); }
