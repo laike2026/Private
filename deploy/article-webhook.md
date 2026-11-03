@@ -2,6 +2,8 @@
 
 POST `https://tiltrotator.com.cn/api/webhook/send_article`
 
+兼容当前第三方工具直接向 `https://tiltrotator.com.cn/` 发 POST 的行为：根路径 POST 与完整接口使用相同的密钥校验、参数校验和入库逻辑。GET 首页仍展示网站。该工具的“域名”字段可填写 `https://tiltrotator.com.cn`。
+
 请求类型：`application/x-www-form-urlencoded` 或 `application/json`。使用 HTTPS、不带 www 的正式域名，避免 POST 跳转。
 
 | 参数 | 说明 |
