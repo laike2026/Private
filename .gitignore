@@ -1,6 +1,8 @@
 node_modules/
 data/auth.json
 data/leads.json
+data/search-settings.json
+data/search-state.json
 data/*.tmp
 .env
 *.log
