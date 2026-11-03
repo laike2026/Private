@@ -167,7 +167,7 @@ function staticFile(req, res, pathname) { const filepath = path.join(publicDir, 
 
 const server = http.createServer(async (req, res) => {
   try {
-    const parsed = new URL(req.url || '/', baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/$/, '') || '/';
+    const parsed = new URL((req.url || '/').replace(/^\/+/, '/'), baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
     if (pathname === '/api/webhook/send_article') return await articleWebhook(req,res);
     if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(req, res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain'); }
     if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8');
