@@ -17,3 +17,12 @@
 @media(max-width:920px){.official-home-grid,.guide-steps,.resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.faq-layout{grid-template-columns:1fr;gap:35px}.guide-next{align-items:flex-start;flex-direction:column}}
 @media(max-width:580px){.official-home-grid,.guide-steps,.resource-grid,.capability-grid{grid-template-columns:1fr}.official-home-grid>div{min-height:0}.official-home-grid h3{margin-top:20px}.faq-list summary{font-size:16px}.guide-next h2{font-size:25px}}
 .search-panel{background:#fff;padding:30px;margin-top:24px;overflow-wrap:anywhere}.search-panel h2{font-size:24px;margin:0 0 16px}.search-panel p{font-size:14px;color:var(--muted);line-height:1.9}.search-panel a{color:var(--orange);text-decoration:underline;text-underline-offset:3px}.search-panel .admin-form{padding:15px 0 28px}.search-panel .button:disabled{opacity:.45;cursor:not-allowed}.search-urls{display:block;width:100%;margin-top:10px;border:1px solid var(--line);padding:14px;resize:vertical;font:13px/1.8 monospace}.search-panel time{font-size:12px}.admin-stats strong{overflow-wrap:anywhere}@media(max-width:580px){.search-panel{padding:22px}.admin-stats{gap:8px}.admin-stats>div{padding:16px 10px}.admin-stats strong{font-size:26px}.admin-header{padding:0 17px;gap:12px;flex-wrap:wrap;height:auto;min-height:72px}.admin-header strong{font-size:14px}}
+.office-photo{margin:0;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.office-photo>img{display:block;width:100%;height:auto;background:#e6e9eb}
+.office-photo figcaption{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:12px 15px;border-top:1px solid var(--line);line-height:1.55}
+.office-photo figcaption strong,.office-photo figcaption span{display:block}
+.office-photo figcaption strong{font-size:15px}
+.office-photo figcaption span{margin-top:3px;font-size:12px;color:var(--muted)}
+.office-photo-map{color:var(--orange);font-size:13px;font-weight:750}
+.office-photo-map:hover{text-decoration:underline;text-underline-offset:3px}
+.contact-info>.office-photo{margin-top:26px}
