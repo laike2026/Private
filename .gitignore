@@ -1,6 +1,7 @@
 node_modules/
 data/auth.json
 data/leads.json
+data/registrations-*.json
 data/search-settings.json
 data/search-state.json
 data/content-archive-*.json

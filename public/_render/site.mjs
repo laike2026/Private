@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { company, address, phone, official, nav, services, extraServices, recruitmentRoles, contactInterests, industries, commonQuestions, platform, stats } from './content.mjs';
 
 const icons = JSON.parse(await readFile(new URL('./outline-icons.json', import.meta.url), 'utf8'));
-const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+export const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 const href = route => esc(route);
 const num = n => String(n).padStart(2, '0');
 const asset = name => '/assets/' + name;
@@ -600,12 +600,12 @@ function contactPage({ query }) {
 }
 function privacyPage() {
   const sections = [
-    { id: 'collection', text: '信息收集', body: '当您提交咨询表单时，我们会收集您填写的称呼、联系电话、企业名称、关注的问题和需求描述。' },
-    { id: 'use', text: '使用目的', body: '这些信息仅用于回应您的咨询、了解企业需求和安排后续沟通。请勿在表单中填写身份证号、银行卡号等敏感信息。' },
-    { id: 'retention', text: '保存与管理', body: '咨询信息保存在网站服务器中，由获授权的管理人员查看。您可通过网站联系页面提出查询或删除请求。' },
+    { id: 'collection', text: '信息收集', body: '提交咨询表单时，我们会收集您填写的称呼、联系电话、企业名称、关注的问题和需求描述。报名活动时，我们会收集参会人姓名、联系电话及您自愿填写的公司名称。' },
+    { id: 'use', text: '使用目的', body: '咨询信息用于回应咨询、了解企业需求和安排后续沟通。报名信息仅用于对应活动的报名登记与会务联系。请勿在表单中填写身份证号、银行卡号等敏感信息。' },
+    { id: 'retention', text: '保存与管理', body: '咨询及报名信息保存在网站服务器中，由获授权的管理人员查看。您可通过网站联系页面提出查询或删除请求。' },
     { id: 'third-party', text: '第三方链接', body: '网站可能提供地图等第三方链接，访问时请查看对应服务的隐私规则。' }
   ];
-  return `${hero({ label: '金品汇官网', title: '隐私说明', description: '我们只收集完成咨询联系所需的信息。', parts: [['隐私说明']], className: 'short' })}
+  return `${hero({ label: '金品汇官网', title: '隐私说明', description: '我们只收集咨询联系和活动报名所需的信息。', parts: [['隐私说明']], className: 'short' })}
   <section class="section"><div class="wrap read-layout">
     <div class="prose" id="body-copy">${sections.map(section => `<h2 id="${section.id}">${section.text}</h2><p>${section.body}</p>`).join('')}
       <div class="article-footer">${link('/contact','联系金品汇')}</div></div>

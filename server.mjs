@@ -4,12 +4,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createPublicSite, indexablePaths } from './public/_render/site.mjs';
+import { event, registrationPage } from './public/_render/event-registration.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
 const dataDir = path.resolve(process.env.SITE_DATA_DIR || path.join(root, 'data'));
 const contentFile = path.join(dataDir, 'content.json');
 const leadsFile = path.join(dataDir, 'leads.json');
+const registrationsFile = path.join(dataDir, `registrations-${path.basename(event.path)}.json`);
 const authFile = path.join(dataDir, 'auth.json');
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || '127.0.0.1';
@@ -17,6 +19,8 @@ const baseUrl = process.env.SITE_URL || `http://${host}:${port}`;
 const publicDeployment = Boolean(process.env.SITE_URL && !/^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?\/?$/i.test(process.env.SITE_URL));
 const setupKey = process.env.ADMIN_SETUP_KEY || '';
 const contactAttempts = new Map();
+const registrationAttempts = new Map();
+let registrationWindow = 0;
 const articleKeyDigest = process.env.ARTICLE_WEBHOOK_KEY_SHA256 || '9b0180cd14ae3340d2547f96e6df7b15bf5054af7314f2dcd28130f0f340d24f';
 const articleAttempts = new Map();
 const searchSettingsFile = path.join(dataDir, 'search-settings.json');
@@ -43,7 +47,11 @@ if (!fs.existsSync(leadsFile)) writeJson(leadsFile, []);
 archiveLegacyVerificationArticle();
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
-function writeJson(file, value) { const temp = `${file}.${process.pid}.tmp`; fs.writeFileSync(temp, JSON.stringify(value, null, 2), 'utf8'); fs.renameSync(temp, file); }
+function writeJson(file, value, mode) {
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode });
+  fs.renameSync(temp, file);
+}
 function archiveLegacyVerificationArticle() {
   const retiredId = 'dbbe2466-cc4f-4263-8d01-8845a2f8c33e';
   const data = JSON.parse(fs.readFileSync(contentFile,'utf8'));
@@ -62,10 +70,81 @@ function url(pathname) { return `${baseUrl.replace(/\/$/, '')}${pathname}`; }
 function readBody(req) { return new Promise((resolve, reject) => { let data = ''; req.on('data', chunk => { data += chunk; if (data.length > 1048576) { reject(new Error('提交内容过大')); req.destroy(); } }); req.on('end', () => resolve(new URLSearchParams(data))); req.on('error', reject); }); }
 function respond(res, status, body, type = 'text/html; charset=utf-8', headers = {}) { res.writeHead(status, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'strict-origin-when-cross-origin', ...headers }); res.end(body); }
 function redirect(res, to) { respond(res, 303, '', 'text/plain; charset=utf-8', { Location: to }); }
-function safeOrigin(req) { const origin = req.headers.origin; return !origin || new URL(origin).host === req.headers.host; }
+function safeOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
 function contactAllowed(req) { const ip = String(req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown'); const now = Date.now(); const attempts = (contactAttempts.get(ip) || []).filter(time => now - time < 3600000); if (attempts.length >= 5) return false; attempts.push(now); contactAttempts.set(ip, attempts); return true; }
 function allPosts() { return readJson(contentFile, seed).posts; }
 function articleUrl(item) { return `/${item.type}/${slug(item.slug)}`; }
+
+const privateResponse = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' };
+const registrationsAdminPath = '/admin/registrations';
+const registrationDate = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+});
+
+function readRegistrations() {
+  try {
+    const records = JSON.parse(fs.readFileSync(registrationsFile, 'utf8'));
+    if (Array.isArray(records)) return records;
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+  }
+  throw new Error('Could not read event registrations');
+}
+
+function registrationAllowed(req) {
+  const window = Math.floor(Date.now() / (10 * 60 * 1000));
+  if (window !== registrationWindow) {
+    registrationWindow = window;
+    registrationAttempts.clear();
+  }
+  const ip = req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown';
+  const count = registrationAttempts.get(ip) || 0;
+  if (count >= 60) return false;
+  registrationAttempts.set(ip, count + 1);
+  return true;
+}
+
+async function handleRegistration(req, res, query) {
+  const page = (status, options) => respond(res, status, registrationPage(options), 'text/html; charset=utf-8', privateResponse);
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const state = Date.now() >= event.closesAt ? 'closed' : query.get('status') === 'registered' ? 'registered' : 'open';
+    return page(200, { state });
+  }
+  if (req.method !== 'POST') return respond(res, 405, 'Method not allowed', 'text/plain', { ...privateResponse, Allow: 'GET, HEAD, POST' });
+  if (Date.now() >= event.closesAt) return page(410, { state: 'closed' });
+  if (!safeOrigin(req)) return respond(res, 403, 'Forbidden', 'text/plain', privateResponse);
+  if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/x-www-form-urlencoded') {
+    return page(415, { error: '请打开报名页后提交表单。' });
+  }
+  if (!registrationAllowed(req)) return page(429, { error: '提交过于频繁，请稍后再试。' });
+
+  const body = await readBody(req);
+  if (Date.now() >= event.closesAt) return page(410, { state: 'closed' });
+  const registered = () => respond(res, 303, '', 'text/plain', { ...privateResponse, Location: `${event.path}?status=registered` });
+  if (body.get('website')) return registered();
+  const company = (body.get('company') || '').trim();
+  const name = (body.get('name') || '').trim().replace(/\s+/g, ' ');
+  const phoneInput = (body.get('phone') || '').trim();
+  const phone = phoneInput.normalize('NFKC').replace(/[\s()-]/g, '').replace(/^00(?=[1-9])/, '+')
+    .replace(/^\+?86(1[3-9]\d{9})$/, '$1');
+  const invalid = (key, error) => page(400, {
+    error, invalid: key, values: { company: company.slice(0, 100), name: name.slice(0, 40), phone: phoneInput.slice(0, 32) }
+  });
+  if (!name || name.length > 40 || /[\p{Cc}]/u.test(name)) return invalid('name', '请填写参会人姓名，最多 40 个字符。');
+  if (phoneInput.length > 32 || !/^\+?\d{7,15}$/.test(phone)) return invalid('phone', '请填写有效的联系电话。');
+  if (company.length > 100 || /[\p{Cc}]/u.test(company)) return invalid('company', '公司名称最多 100 个字符，请在一行内填写。');
+
+  const records = readRegistrations();
+  if (!records.some(item => item.name === name && item.phone === phone)) {
+    records.unshift({ name, phone, company, createdAt: new Date().toISOString() });
+    writeJson(registrationsFile, records, 0o600);
+  }
+  return registered();
+}
 
 // Only canonical, public pages are eligible. The queue is derived from durable content
 // and successful fingerprints, so a restart or GitHub update cannot lose new URLs.
@@ -232,12 +311,45 @@ const renderPublicPage = createPublicSite({
 
 function auth() { return readJson(authFile, null); }
 function isLogged(req) { const a = auth(); if (!a) return false; const cookie = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jph_session=')); if (!cookie) return false; const [exp, sig] = cookie.slice(12).split('.'); if (!exp || !sig || Number(exp) < Date.now()) return false; const expected = crypto.createHmac('sha256', a.secret).update(exp).digest('hex'); return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); }
-function adminFrame(title, body, logged = false) { return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(title)}｜金品汇后台</title><link rel="stylesheet" href="/styles.css?v=20261103-formal"></head><body class="admin-body"><header class="admin-header"><a href="/">金品汇官网 ↗</a><strong>内容管理</strong>${logged?'<a href="/admin/seo">搜索引擎接入</a>':''}${logged ? '<form method="post" action="/admin/logout"><button>退出登录</button></form>' : ''}</header><main class="admin-main">${body}</main></body></html>`; }
+function adminFrame(title, body, logged = false, stylesheet = '') { return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(title)}｜金品汇后台</title><link rel="stylesheet" href="/styles.css?v=20261103-formal">${stylesheet ? `<link rel="stylesheet" href="${esc(stylesheet)}">` : ''}></head><body class="admin-body"><header class="admin-header"><a href="/">金品汇官网 ↗</a><strong>内容管理</strong>${logged?'<a href="/admin/seo">搜索引擎接入</a>':''}${logged ? '<form method="post" action="/admin/logout"><button>退出登录</button></form>' : ''}</header><main class="admin-main">${body}</main></body></html>`; }
 function adminLogin(setup = false, error = false) { return adminFrame(setup ? '设置管理员密码' : '后台登录', `<div class="admin-auth"><span class="kicker"><i></i>CONTENT MANAGEMENT</span><h1>${setup ? '设置管理员密码' : '登录内容管理后台'}</h1><p>${setup ? '首次使用，请设置至少 12 位的管理员密码。' : '登录后可发布新闻和博客，并查看咨询信息。'}</p>${error ? '<p class="admin-error">部署密钥或密码不正确、两次输入不一致，或密码不符合要求，请重试。</p>' : ''}<form method="post" action="${setup ? '/admin/setup' : '/admin/login'}">${setup && publicDeployment ? '<label>部署密钥<input type="password" name="setupKey" required autocomplete="off"></label>' : ''}<label>管理员密码<input type="password" name="password" minlength="${setup ? 12 : 1}" required autocomplete="${setup ? 'new-password' : 'current-password'}"></label>${setup ? '<label>再次输入密码<input type="password" name="passwordConfirm" minlength="12" required autocomplete="new-password"></label>' : ''}<button class="button button-primary">${setup ? '完成设置' : '登录后台'} ↗</button></form></div>`); }
-function adminDashboard() { const items = allPosts(); const leads = readJson(leadsFile, []); return adminFrame('管理首页', `<div class="admin-top"><div><span class="kicker"><i></i>DASHBOARD</span><h1>内容管理</h1><p>新闻、博客和咨询信息保存在本地 data 文件夹。</p></div><a class="button button-primary" href="/admin/posts/new">发布文章 ↗</a></div><div class="admin-stats"><div><strong>${items.filter(x => x.type === 'news').length}</strong><span>新闻</span></div><div><strong>${items.filter(x => x.type === 'blog').length}</strong><span>博客</span></div><div><strong>${leads.length}</strong><span>咨询</span></div></div><div class="admin-tabs"><a class="current" href="/admin">文章管理</a><a href="/admin/leads">咨询信息</a></div><div class="admin-table">${items.sort((a,b) => b.date.localeCompare(a.date)).map(x => `<div><span>${x.type === 'news' ? '新闻' : '博客'}</span><a href="${articleUrl(x)}" target="_blank">${esc(x.title)}</a><small>${esc(x.date)}</small><a href="/admin/posts/${esc(x.id)}/edit">编辑</a><form method="post" action="/admin/posts/${esc(x.id)}/delete" onsubmit="return confirm('确认删除这篇文章？')"><button>删除</button></form></div>`).join('')}</div>`, true); }
+function adminDashboard() { const items = allPosts(); const leads = readJson(leadsFile, []); return adminFrame('管理首页', `<div class="admin-top"><div><span class="kicker"><i></i>DASHBOARD</span><h1>内容管理</h1><p>新闻、博客和咨询信息保存在本地 data 文件夹。</p></div><a class="button button-primary" href="/admin/posts/new">发布文章 ↗</a></div><div class="admin-stats"><div><strong>${items.filter(x => x.type === 'news').length}</strong><span>新闻</span></div><div><strong>${items.filter(x => x.type === 'blog').length}</strong><span>博客</span></div><div><strong>${leads.length}</strong><span>咨询</span></div></div>${adminTabs('/admin')}<div class="admin-table">${items.sort((a,b) => b.date.localeCompare(a.date)).map(x => `<div><span>${x.type === 'news' ? '新闻' : '博客'}</span><a href="${articleUrl(x)}" target="_blank">${esc(x.title)}</a><small>${esc(x.date)}</small><a href="/admin/posts/${esc(x.id)}/edit">编辑</a><form method="post" action="/admin/posts/${esc(x.id)}/delete" onsubmit="return confirm('确认删除这篇文章？')"><button>删除</button></form></div>`).join('')}</div>`, true); }
 function adminPostForm(item = null, error = '') { return adminFrame(item ? '编辑文章' : '发布文章', `<div class="admin-top"><div><a href="/admin" class="back-link">← 返回内容管理</a><h1>${item ? '编辑文章' : '发布文章'}</h1></div></div>${error ? `<p class="admin-error">${esc(error)}</p>` : ''}<form class="admin-form" method="post" action="${item ? `/admin/posts/${esc(item.id)}/edit` : '/admin/posts/new'}"><label>栏目<select name="type"><option value="news" ${item?.type === 'news' ? 'selected' : ''}>新闻中心</option><option value="blog" ${item?.type === 'blog' ? 'selected' : ''}>出海博客</option></select></label><label>发布日期<input type="date" name="date" required value="${esc(item?.date || new Date().toISOString().slice(0,10))}"></label><label class="full">标题<input name="title" required maxlength="140" value="${esc(item?.title || '')}"></label><label class="full">摘要<textarea name="summary" rows="3" required maxlength="300">${esc(item?.summary || '')}</textarea></label><label class="full">正文（每行一个段落）<textarea name="body" rows="16" required maxlength="100000">${esc(item?.body || '')}</textarea></label><button class="button button-primary" type="submit">保存文章 ↗</button></form>`, true); }
-function adminLeads() { const leads = readJson(leadsFile, []); return adminFrame('咨询信息', `<div class="admin-top"><div><span class="kicker"><i></i>INQUIRIES</span><h1>咨询信息</h1></div></div><div class="admin-tabs"><a href="/admin">文章管理</a><a class="current" href="/admin/leads">咨询信息</a></div><div class="lead-list">${leads.length ? leads.map(x => `<div><small>${esc(x.createdAt)}</small><h2>${esc(x.name)} · ${esc(x.company || '未填写企业')}</h2><p><strong>联系电话：</strong>${esc(x.phone)}</p><p><strong>关注方向：</strong>${esc(x.interest || '未选择')}</p><p><strong>需求：</strong>${esc(x.message || '未填写')}</p></div>`).join('') : '<p class="empty-note">暂无咨询信息。</p>'}</div>`, true); }
+function adminLeads() { const leads = readJson(leadsFile, []); return adminFrame('咨询信息', `<div class="admin-top"><div><span class="kicker"><i></i>INQUIRIES</span><h1>咨询信息</h1></div></div>${adminTabs('/admin/leads')}<div class="lead-list">${leads.length ? leads.map(x => `<div><small>${esc(x.createdAt)}</small><h2>${esc(x.name)} · ${esc(x.company || '未填写企业')}</h2><p><strong>联系电话：</strong>${esc(x.phone)}</p><p><strong>关注方向：</strong>${esc(x.interest || '未选择')}</p><p><strong>需求：</strong>${esc(x.message || '未填写')}</p></div>`).join('') : '<p class="empty-note">暂无咨询信息。</p>'}</div>`, true); }
 function notFound() { return renderPublicPage('/404').html; }
+
+function adminTabs(active) {
+  const tabs = [['/admin', '文章管理'], ['/admin/leads', '咨询信息'], [registrationsAdminPath, '活动报名']];
+  return `<nav class="admin-tabs" aria-label="后台栏目">${tabs.map(([route, label]) =>
+    `<a href="${route}"${route === active ? ' class="current" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+}
+
+function adminRegistrations() {
+  const records = readRegistrations();
+  const registrationUrl = esc(url(event.path));
+  const rows = records.map(record => `<tr><td>${esc(record.name)}</td><td>${esc(record.phone)}</td>
+    <td>${esc(record.company || '未填写')}</td><td>${esc(registrationDate.format(new Date(record.createdAt)))}</td></tr>`).join('');
+  return adminFrame('活动报名', `<div class="registration-admin">
+    <div class="admin-top"><div><h1>活动报名</h1><p>下载本场活动的报名物料，并查看已经提交的报名。</p></div></div>
+    ${adminTabs(registrationsAdminPath)}
+    <section class="registration-share" aria-labelledby="registration-event">
+      <div><h2 id="registration-event">${event.title}</h2>
+        <p>${event.date} ${event.time}<br>${event.venue}</p>
+        <a class="registration-url" href="${event.path}">${registrationUrl}</a>
+        <div class="registration-actions"><a href="${event.path}">打开报名页</a>
+          <a href="${event.poster}" download="服装出海活动报名海报.jpg">下载报名海报</a>
+          <a href="${event.qr}" download="服装出海活动报名二维码.png">下载二维码</a></div>
+      </div>
+      <img src="${event.qr}" alt="服装出海活动报名二维码" width="158" height="158">
+    </section>
+    <section class="registration-list" aria-labelledby="registration-list">
+      <div class="registration-list-header"><h2 id="registration-list">报名名单</h2><span>共 ${records.length} 人</span></div>
+      ${records.length ? `<div class="registration-table-wrap" tabindex="0" role="region" aria-label="报名记录"><table class="registration-table">
+        <thead><tr><th scope="col">参会人姓名</th><th scope="col">联系电话</th><th scope="col">公司名称</th><th scope="col">报名时间</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : '<p class="registration-empty">暂时还没有报名。分享上方的报名页或海报后，名单会在这里显示。</p>'}
+    </section>
+  </div>`, true, event.styles);
+}
 
 const staticTypes = {
   '.txt': 'text/plain; charset=utf-8', '.html': 'text/html; charset=utf-8',
@@ -261,6 +373,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const parsed = new URL((req.url || '/').replace(/^\/+/, '/'), baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
     if (pathname === '/api/webhook/send_article' || (pathname === '/' && req.method === 'POST')) return await articleWebhook(req,res);
+    if (pathname === event.path) return await handleRegistration(req, res, parsed.searchParams);
     if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain'); }
     if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8', {'Cache-Control':'no-cache'});
     if (['/sitemap.xml','/news-sitemap.xml','/blog-sitemap.xml'].includes(pathname)) return respond(res,200,searchXml(pathname.startsWith('/news-')?'news':pathname.startsWith('/blog-')?'blog':''),'application/xml; charset=utf-8',{'Cache-Control':'no-cache'});
@@ -285,7 +398,7 @@ const server = http.createServer(async (req, res) => {
       return respond(res, 404, 'Not found', 'text/plain');
     }
     if (req.method !== 'GET') return respond(res, 405, 'Method not allowed', 'text/plain');
-    if (pathname.startsWith('/admin')) { if (!auth()) { if (publicDeployment && !setupKey) return respond(res, 503, adminFrame('后台尚未启用', '<div class="admin-auth"><h1>后台尚未启用</h1><p>请网站管理员先在服务器上配置首次设置密钥。</p></div>')); return respond(res, 200, adminLogin(true)); } if (pathname === '/admin/login') return respond(res, 200, adminLogin()); if (!isLogged(req)) return redirect(res, '/admin/login'); if (pathname === '/admin') return respond(res, 200, adminDashboard()); if (pathname === '/admin/seo') return respond(res,200,adminSearch(req)); if (pathname === '/admin/leads') return respond(res, 200, adminLeads()); if (pathname === '/admin/posts/new') return respond(res, 200, adminPostForm()); const edit = pathname.match(/^\/admin\/posts\/([^/]+)\/edit$/); if (edit) { const item = allPosts().find(x => x.id === edit[1]); return respond(res, item ? 200 : 404, item ? adminPostForm(item) : notFound()); } return respond(res, 404, notFound()); }
+    if (pathname.startsWith('/admin')) { if (!auth()) { if (publicDeployment && !setupKey) return respond(res, 503, adminFrame('后台尚未启用', '<div class="admin-auth"><h1>后台尚未启用</h1><p>请网站管理员先在服务器上配置首次设置密钥。</p></div>')); return respond(res, 200, adminLogin(true)); } if (pathname === '/admin/login') return respond(res, 200, adminLogin()); if (!isLogged(req)) return redirect(res, '/admin/login'); if (pathname === '/admin') return respond(res, 200, adminDashboard()); if (pathname === '/admin/seo') return respond(res,200,adminSearch(req)); if (pathname === '/admin/leads') return respond(res, 200, adminLeads()); if (pathname === registrationsAdminPath) return respond(res, 200, adminRegistrations(), 'text/html; charset=utf-8', privateResponse); if (pathname === '/admin/posts/new') return respond(res, 200, adminPostForm()); const edit = pathname.match(/^\/admin\/posts\/([^/]+)\/edit$/); if (edit) { const item = allPosts().find(x => x.id === edit[1]); return respond(res, item ? 200 : 404, item ? adminPostForm(item) : notFound()); } return respond(res, 404, notFound()); }
     const view = renderPublicPage(pathname, parsed.searchParams);
     return respond(res, view.status, view.html);
   } catch (error) { console.error(error); if (!res.headersSent) respond(res, 500, '服务器暂时无法处理请求。', 'text/plain; charset=utf-8'); }
