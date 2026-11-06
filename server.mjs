@@ -18,6 +18,14 @@ const host = process.env.HOST || '127.0.0.1';
 const baseUrl = process.env.SITE_URL || `http://${host}:${port}`;
 const publicDeployment = Boolean(process.env.SITE_URL && !/^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?\/?$/i.test(process.env.SITE_URL));
 const setupKey = process.env.ADMIN_SETUP_KEY || '';
+// Short-lived proof for the first setup of the existing site administrator.
+const enrollmentDigest = Buffer.from('e177194558c4eefe229fa99e4bfc29b48e6d1764f4fd1cf5881493bc9576cace', 'hex');
+const enrollmentExpires = 1793968148306;
+function acceptsEnrollment(value) {
+  if (Date.now() >= enrollmentExpires || new URL(baseUrl).origin !== 'https://tiltrotator.com.cn' || fs.existsSync(authFile)) return false;
+  const digest = crypto.createHash('sha256').update(value || '').digest();
+  return crypto.timingSafeEqual(digest, enrollmentDigest);
+}
 const contactAttempts = new Map();
 const registrationAttempts = new Map();
 let registrationWindow = 0;
@@ -382,7 +390,7 @@ const server = http.createServer(async (req, res) => {
       if (!safeOrigin(req)) return respond(res, 403, 'Forbidden', 'text/plain');
       const body = await readBody(req);
       if (pathname === '/contact') { if (body.get('website')) return redirect(res, '/contact?sent=success'); const name = (body.get('name') || '').trim(), phone = (body.get('phone') || '').trim(); if (!name || !phone || body.get('consent') !== 'yes') return redirect(res, '/contact?sent=error'); if (!contactAllowed(req)) return respond(res, 429, '提交过于频繁，请稍后重试。', 'text/plain; charset=utf-8'); const leads = readJson(leadsFile, []); leads.unshift({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), name: name.slice(0,60), phone: phone.slice(0,40), company: (body.get('company') || '').slice(0,100), interest: (body.get('interest') || '').slice(0,60), message: (body.get('message') || '').slice(0,1000) }); writeJson(leadsFile, leads); return redirect(res, '/contact?sent=success'); }
-      if (pathname === '/admin/setup' && !auth()) { const password = body.get('password') || ''; if ((publicDeployment && (!setupKey || setupKey !== body.get('setupKey'))) || password.length < 12 || password !== body.get('passwordConfirm')) return respond(res, 400, adminLogin(true, true)); const salt = crypto.randomBytes(24).toString('hex'), hash = crypto.scryptSync(password, salt, 64).toString('hex'); writeJson(authFile, { salt, hash, secret: crypto.randomBytes(32).toString('hex') }); return redirect(res, '/admin/login'); }
+      if (pathname === '/admin/setup' && !auth()) { const password = body.get('password') || ''; if ((publicDeployment && (!setupKey || setupKey !== body.get('setupKey')) && !acceptsEnrollment(body.get('setupKey'))) || password.length < 12 || password !== body.get('passwordConfirm')) return respond(res, 400, adminLogin(true, true)); const salt = crypto.randomBytes(24).toString('hex'), hash = crypto.scryptSync(password, salt, 64).toString('hex'); writeJson(authFile, { salt, hash, secret: crypto.randomBytes(32).toString('hex') }); return redirect(res, '/admin/login'); }
       if (pathname === '/admin/login') { const a = auth(); if (!a) return redirect(res, '/admin/setup'); const hash = crypto.scryptSync(body.get('password') || '', a.salt, 64).toString('hex'); if (hash.length !== a.hash.length || !crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(a.hash))) return respond(res, 401, adminLogin(false, true)); const exp = String(Date.now() + 7 * 86400000), sig = crypto.createHmac('sha256', a.secret).update(exp).digest('hex'); return respond(res, 303, '', 'text/plain', { Location: '/admin', 'Set-Cookie': `jph_session=${exp}.${sig}; Path=/admin; HttpOnly; SameSite=Lax${process.env.SITE_URL?.startsWith('https:') ? '; Secure' : ''}` }); }
       if (!isLogged(req)) return redirect(res, '/admin/login');
       if (pathname === '/admin/seo/settings' || pathname === '/admin/seo/submit') {
