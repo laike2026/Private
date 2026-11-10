@@ -98,12 +98,39 @@ function footer() {
       ${group('行业与资讯', [['/industries', '行业方案'], ['/cases', '服务实践'], ['/news', '新闻中心'], ['/blog', '出海博客']])}
       ${group('关于与帮助', [['/about', '关于金品汇'], ['/platform-guide', '平台指南'], ['/faq', '常见问题'], ['/contact', '联系我们']])}
     </div>
+    ${socialFooter()}
     <div class="footer-bottom">
       <span>© ${new Date().getFullYear()} ${company}</span>
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026019255号-3</a>
       <a href="${href('/privacy')}">隐私说明</a>
     </div>
   </div></footer>`;
+}
+
+export function socialFooter() {
+  const accounts = [
+    { platform: '微信', file: 'wechat', size: 728, action: '添加好友', hint: '使用微信扫一扫，添加好友。' },
+    { platform: '小红书', file: 'xiaohongshu', size: 260, action: '关注账号', hint: '打开小红书，使用扫一扫识别二维码。' },
+    { platform: '抖音', file: 'douyin', size: 760, action: '关注账号', hint: '打开抖音，使用扫一扫识别抖音码。' }
+  ];
+  return `<section class="social-footer" aria-labelledby="social-footer-title">
+    <div class="social-footer-heading"><h2 id="social-footer-title">关注与联系</h2>
+      <p class="social-account-name">跨境AI在江西</p><p>点击二维码放大，使用对应平台扫一扫。</p></div>
+    <div class="social-qr-cards">${accounts.map(account => `<a class="social-qr-card"
+      href="${asset('social-' + account.file + '-qr.png')}" data-qr-platform="${account.platform}"
+      data-qr-hint="${account.hint}" aria-label="放大${account.platform}二维码" aria-haspopup="dialog" aria-controls="social-qr-dialog">
+      <img src="${asset('social-' + account.file + '-qr.png')}" width="${account.size}" height="${account.size}"
+        alt="${account.platform}账号二维码" loading="lazy" decoding="async">
+      <strong>${account.platform}</strong><span>${account.action}</span>
+    </a>`).join('')}</div>
+  </section>
+  <dialog class="social-qr-dialog" id="social-qr-dialog" aria-labelledby="social-qr-title" aria-describedby="social-qr-hint">
+    <div class="social-qr-dialog-content"><div class="social-qr-dialog-header">
+      <h2 id="social-qr-title">账号二维码</h2><button type="button" data-qr-close autofocus>关闭</button>
+    </div>
+    <img class="social-qr-full" alt="" width="320" height="320">
+    <p id="social-qr-hint"></p><a class="social-qr-save" download>保存二维码</a></div>
+  </dialog>`;
 }
 function crumbs(parts) {
   return `<nav class="crumbs" aria-label="当前位置"><a href="${href('/')}">首页</a>
@@ -734,7 +761,9 @@ function documentFor({ route, title, description, body, url, schema, image = wor
   <title>${esc(title)}｜金品汇</title>
   <link rel="icon" href="/assets/jinpin-logo.png">
   <link rel="stylesheet" href="/assets/jph-site.css?v=${esc(revision)}">
+  <link rel="stylesheet" href="/assets/social-qr.css?v=${esc(revision)}">
   <script src="/assets/jph-site.js?v=${esc(revision)}" defer></script>
+  <script src="/assets/social-qr.js?v=${esc(revision)}" defer></script>
   ${structured}
 </head>
 <body>

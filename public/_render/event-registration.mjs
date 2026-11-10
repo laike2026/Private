@@ -1,5 +1,5 @@
 import { company, phone } from './content.mjs';
-import { esc } from './site.mjs';
+import { esc, socialFooter } from './site.mjs';
 
 export const event = {
   path: '/r/ai1110',
@@ -42,7 +42,9 @@ export function registrationPage({ state = 'open', error = '', invalid = '', val
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, follow"><meta name="theme-color" content="#fff7ef">
   <title>${event.title}活动报名｜金品汇</title>
-  <link rel="stylesheet" href="${event.styles}">
+  <link rel="stylesheet" href="${event.styles}?v=20261110-social">
+  <link rel="stylesheet" href="/assets/social-qr.css?v=20261110">
+  <script src="/assets/social-qr.js?v=20261110" defer></script>
 </head><body class="event-body">
   <header class="event-header"><div class="event-shell event-header-inner">
     <a class="event-brand" href="/" aria-label="金品汇官网"><span class="event-brand-icon"><img src="/assets/jinpinhui-logo.webp" alt=""></span><strong>金品汇</strong></a>
@@ -65,6 +67,8 @@ export function registrationPage({ state = 'open', error = '', invalid = '', val
       <p>特邀讲师 <strong>沙高峰</strong><span>FDE 工程师</span></p>
     </section>
   </main>
-  <footer class="event-footer"><div class="event-shell"><p>主办单位 · ${company}</p><a href="tel:+86${phone}">活动咨询 ${phone}</a></div></footer>
+  <footer class="event-footer"><div class="event-shell">${socialFooter()}
+    <div class="event-footer-bottom"><p>主办单位 · ${company}</p><a href="tel:+86${phone}">活动咨询 ${phone}</a></div>
+  </div></footer>
 </body></html>`;
 }

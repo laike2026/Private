@@ -96,7 +96,7 @@
 .event-agenda p strong { color: var(--event-ink); margin-inline: 3px 7px; }
 .event-agenda p span { white-space: nowrap; }
 .event-footer { border-top: 1px solid var(--event-line); color: var(--event-muted); font-size: 13px; }
-.event-footer > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 22px; padding-block: 17px; }
+.event-footer-bottom { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 22px; padding-block: 17px; }
 .event-footer p { margin: 0; }
 .event-footer a { white-space: nowrap; }
 @media (max-width: 780px) {
