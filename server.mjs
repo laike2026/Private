@@ -356,15 +356,28 @@ const staticTypes = {
   '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp'
 };
-function staticFile(res, pathname) {
+function staticFile(req, res, pathname) {
   const filepath = path.join(publicDir, pathname);
   const allowed = pathname.startsWith('/assets/') ? path.join(publicDir, 'assets') : publicDir;
   if (!filepath.startsWith(allowed + path.sep)) return false;
   try {
     if (!fs.statSync(filepath).isFile()) return false;
-    const type = staticTypes[path.extname(filepath).toLowerCase()] || 'application/octet-stream';
-    const cache = pathname === '/sogousiteverification.txt' ? 'no-store' : 'public, max-age=3600';
-    respond(res, 200, fs.readFileSync(filepath), type, { 'Cache-Control': cache });
+    const extension = path.extname(filepath).toLowerCase();
+    const type = staticTypes[extension] || 'application/octet-stream';
+    const body = fs.readFileSync(filepath);
+    const revalidate = extension === '.css' || extension === '.js';
+    const cache = pathname === '/sogousiteverification.txt' ? 'no-store' : revalidate ? 'public, no-cache, must-revalidate' : 'public, max-age=3600';
+    const headers = { 'Cache-Control': cache };
+    if (revalidate) {
+      const etag = '"' + crypto.createHash('sha256').update(body).digest('hex') + '"';
+      headers.ETag = etag;
+      const matches = String(req.headers['if-none-match'] || '').split(',').some(tag => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === etag);
+      if ((req.method === 'GET' || req.method === 'HEAD') && matches) {
+        respond(res, 304, '', type, headers);
+        return true;
+      }
+    }
+    respond(res, 200, body, type, headers);
     return true;
   } catch { return false; }
 }
@@ -374,7 +387,7 @@ const server = http.createServer(async (req, res) => {
     const parsed = new URL((req.url || '/').replace(/^\/+/, '/'), baseUrl); const pathname = decodeURIComponent(parsed.pathname).replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
     if (pathname === '/api/webhook/send_article' || (pathname === '/' && req.method === 'POST')) return await articleWebhook(req,res);
     if (pathname === event.path) return await handleRegistration(req, res, parsed.searchParams);
-    if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain'); }
+    if (pathname.startsWith('/assets/') || pathname === '/styles.css' || pathname === '/client.js' || pathname === '/baidu_verify_codeva-ahDYCZppdD.html' || pathname === '/sogousiteverification.txt') { if (staticFile(req, res, pathname)) return; return respond(res, 404, 'Not found', 'text/plain', { 'Cache-Control': 'no-store' }); }
     if (pathname === '/robots.txt') return respond(res, 200, 'User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: ' + url('/sitemap.xml') + '\n', 'text/plain; charset=utf-8', {'Cache-Control':'no-cache'});
     if (['/sitemap.xml','/news-sitemap.xml','/blog-sitemap.xml'].includes(pathname)) return respond(res,200,searchXml(pathname.startsWith('/news-')?'news':pathname.startsWith('/blog-')?'blog':''),'application/xml; charset=utf-8',{'Cache-Control':'no-cache'});
     if (pathname === '/sitemap.txt') return respond(res,200,searchPages().map(x=>x.url).join('\n')+'\n','text/plain; charset=utf-8',{'Cache-Control':'no-cache'});
