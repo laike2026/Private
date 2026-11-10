@@ -11,6 +11,15 @@ const serviceTitle = s => s.name.endsWith('服务') ? s.name : s.name + '服务'
 const interestQuery = name => name ? '?interest=' + encodeURIComponent(name) : '';
 const [opc, afterSales] = extraServices;
 const industryRoute = i => '/industries/' + i.id;
+// Baidu BD-09 coordinates for Jiangnan Yungang building 18; address confirmed by the company.
+const officeMapUrl = 'https://api.map.baidu.com/marker?' + new URLSearchParams({
+  location: '28.649116,115.962395', coord_type: 'bd09ll', title: company,
+  content: address, output: 'html', zoom: '18', src: 'webapp.jinpinhui.website'
+});
+const officeMapImage = (width, height) => 'https://api.map.baidu.com/staticimage?' + new URLSearchParams({
+  center: '115.962395,28.649116', width: String(width), height: String(height), zoom: '18',
+  markers: '115.962395,28.649116', markerStyles: 'l,A,0xF25B13', copyright: '0'
+});
 const photography = [
   ['machinery', '精密加工设备'], ['building', '建筑材料样品'],
   ['hardware', '五金工具与零件'], ['furniture', '木工车间与家具'],
@@ -626,7 +635,7 @@ function aboutPage() {
   return `${hero({
     label: '关于金品汇', title: '扎根赣鄱大地，服务江西制造',
     description: company + '是阿里巴巴国际站江西本地服务商，办公室位于南昌市青山湖区。',
-    parts: [['关于金品汇']], actions: button('/contact', '联系南昌团队', 'primary'),
+    parts: [['关于金品汇']], actions: button('/contact', '联系南昌团队', 'primary') + button('#office-location', '查看办公位置', 'light', 'map-pin'),
     art: officePhoto({ eager: true })
   })}
   ${statsBar()}
@@ -644,10 +653,28 @@ function aboutPage() {
       <div class="point">${iconBox('briefcase')}<h3>全球化服务</h3><p>持续积累海外市场经验，帮助企业建立品牌形象。</p></div>
     </div>
   </div></section>
-  <section class="section"><div class="wrap values">${eyebrow('公司愿景')}<h2>成为中国制造出海的首选服务商</h2><p>公司使命 · 让更多中小企业轻松做全球生意</p></div></section>${cta()}`;
+  <section class="section"><div class="wrap values">${eyebrow('公司愿景')}<h2>成为中国制造出海的首选服务商</h2><p>公司使命 · 让更多中小企业轻松做全球生意</p></div></section>
+  <section class="section pale office-location" id="office-location" aria-labelledby="office-location-title"><div class="wrap">
+    <div class="office-location-heading">
+      <div>${eyebrow('南昌办公室')}<h2 id="office-location-title">在这里，与您见面</h2></div>
+      <p>欢迎到访金品汇，面对面交流您的出海计划。<br>到访前可提前致电，方便我们安排接待。</p>
+    </div>
+    <div class="office-location-panel">
+      <div class="office-location-details">
+        <div class="office-location-address">${iconBox('map-pin')}<div><span class="fine">办公室地址</span><address>${esc(address)}</address><button class="copy-address" type="button" data-copy="${esc(address)}" aria-live="polite">复制地址</button></div></div>
+        <div class="office-location-contact"><a class="office-location-phone num" href="tel:+86${phone}">${icon('phone')}<span>${phone}</span></a><a class="btn btn-primary" href="${esc(officeMapUrl)}" target="_blank" rel="noopener noreferrer">在百度地图中打开${icon('external-link')}</a></div>
+      </div>
+      <figure class="office-location-preview">
+        <a class="office-location-map" href="${esc(officeMapUrl)}" target="_blank" rel="noopener noreferrer" aria-label="在百度地图查看南昌金品汇办公室位置及到访路线（新窗口打开）">
+          <picture><source media="(max-width: 560px)" srcset="${esc(officeMapImage(400, 340))}" width="400" height="340"><img src="${esc(officeMapImage(1000, 420))}" width="1000" height="420" loading="lazy" decoding="async" referrerpolicy="strict-origin-when-cross-origin" alt="百度地图：A标记为南昌金品汇办公室所在的江南云港18栋，办公室位于1512室"></picture>
+        </a>
+        <figcaption class="office-location-caption"><span>${icon('map-pin')}A · 南昌金品汇（江南云港18幢1512）</span><span>点击地图查看路线${icon('external-link')}</span></figcaption>
+      </figure>
+    </div>
+  </div></section>${cta()}`;
 }
 function contactPage({ query }) {
-  const map = 'https://map.baidu.com/search/' + encodeURIComponent(address);
+  const map = officeMapUrl;
   const interest = query.get('interest');
   const sent = query.get('sent');
   return `${hero({
