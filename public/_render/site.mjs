@@ -202,46 +202,102 @@ const method = [
 
 function home({ news, blogs }) {
   const lead = news[0];
-  return `<section class="home-hero">
-    <img class="hero-image" src="${asset('jinpinhui-workshop-1536.webp')}"
-      srcset="${asset('jinpinhui-workshop-800.webp')} 800w, ${asset('jinpinhui-workshop-1536.webp')} 1536w"
-      sizes="100vw" width="1536" height="1024" alt="制造车间与出口包装" fetchpriority="high" decoding="async">
-    <div class="wrap">
-      <div class="home-copy">
-        ${eyebrow('阿里巴巴国际站江西本地服务商')}
-        <h1>让江西制造<br><span>走向全球市场</span></h1>
-        <p>为江西制造企业提供国际站入驻、运营与售后支持，也陪伴 OPC 个人创业者起步做外贸。</p>
-        <div class="actions">${consult()}${button(serviceRoute(opc), '了解 OPC 个人创业', 'ghost', 'arrow-right')}</div>
+  const blogItems = blogs.slice(0, 3);
+  return `<div class="home-page">
+    <section class="home-intro" aria-labelledby="home-title"><div class="wrap home-intro-grid">
+      <div class="home-intro-copy">
+        <p class="home-partner">阿里巴巴国际站江西本地服务商</p>
+        <h1 id="home-title">江西企业出海<br><span>身边就有专业支持</span></h1>
+        <p class="home-intro-description">南昌金品汇，服务江西制造企业与 OPC 个人创业者。围绕国际站入驻、运营增长、外贸团队和交易配套，把下一步工作安排清楚。</p>
+        <div class="actions">${consult()}${button(serviceRoute(opc), '了解 OPC 创业', 'light', 'arrow-right')}</div>
       </div>
-      <div class="hero-location">${icon('map-pin')}<span>江西 · 南昌</span></div>
-    </div>
-  </section>
-  ${statsBar()}
-  <section class="section"><div class="wrap">
-    <div class="heading-row">${sectionHead('服务方案', '从开店到履约，每一步都有支持', '按企业当前阶段选择服务。顾问先了解产品、人员和目标，再共同安排下一步。')}${link('/services','查看全部服务')}</div>
-    ${serviceTiles()}
-    ${extraServiceLinks()}
-  </div></section>
-  <section class="section dark"><div class="wrap">${sectionHead('服务流程', '从诊断开始，把工作落到实处')}${steps(method)}</div></section>
-  <section class="section pale"><div class="wrap">
-    <div class="heading-row">${sectionHead('行业方案', '按采购场景，组织出海内容', '从设备参数、材质工艺到定制与交付，先回答海外采购商最关心的问题。')}${link('/industries','查看行业方案')}</div>
-    ${industryTiles()}
-  </div></section>
-  <section class="section"><div class="wrap">
-    ${sectionHead('新闻与博客', '了解金品汇与外贸实务')}
-    <div class="editorial-home">
-      ${lead ? `<a class="lead-news" href="${href(lead.route)}">
-        <span class="eyebrow">公司新闻</span><h3>${esc(lead.title)}</h3><p>${esc(lead.summary)}</p><span class="text-link">阅读新闻 ${icon('arrow-right')}</span>
-      </a>` : `<a class="lead-news" href="/news">
-        <span class="eyebrow">公司新闻</span><h3>金品汇服务动态</h3><p>了解江西本地服务和跨境电商动态。</p><span class="text-link">查看新闻中心 ${icon('arrow-right')}</span>
-      </a>`}
-      <div><div class="list-header"><h3>出海博客</h3>${link('/blog','查看全部')}</div>${articleList(blogs.slice(0, 3))}</div>
-    </div>
-  </div></section>
-  <section class="compact steel"><div class="wrap split"><div>${sectionHead('平台与本地支持', '了解国际站，确定服务重点')}</div>
-    <div><p>查看数字店铺、推广、交易保障等平台能力，以及金品汇可提供的本地支持。</p><div class="actions">${link('/platform-guide','查看平台指南')}${link('/faq','阅读常见问题')}</div></div>
-  </div></section>
-  ${cta()}`;
+      <div class="home-office">
+        ${officePhoto({ eager: true })}
+        ${link('/about', '了解南昌本地服务团队')}
+      </div>
+    </div></section>
+
+    <section class="home-block" id="home-services" aria-labelledby="home-services-title"><div class="wrap">
+      <div class="home-heading"><h2 id="home-services-title">从您当前的阶段开始</h2>
+        <p>为制造企业梳理经营路径，也为个人创业者安排起步工作。</p></div>
+      <div class="phase-switch home-audience-tabs" role="tablist" aria-label="选择服务对象">
+        <button type="button" role="tab" id="home-tab-business" aria-selected="true" aria-controls="home-business" tabindex="0">${icon('building-store')}制造企业出海</button>
+        <button type="button" role="tab" id="home-tab-opc" aria-selected="false" aria-controls="home-opc" tabindex="-1">${icon('compass')}OPC 个人创业</button>
+      </div>
+      <div class="home-path-panel" role="tabpanel" id="home-business" aria-labelledby="home-tab-business">
+        <div class="home-path-intro"><h3>从开店到经营，<br>把每一步衔接起来</h3>
+          <p>先梳理现状，再明确优先级。按产品、团队和目标，安排可执行的阶段工作。</p>
+          ${link('/services', '查看企业服务方案')}</div>
+        <div class="home-service-links">${services.map(service => `<a class="home-service-link" href="${href(serviceRoute(service))}">
+          ${icon(service.icon)}<div><h4>${esc(service.name)}</h4><p>${esc(service.brief)}</p></div>${icon('arrow-up-right')}
+        </a>`).join('')}</div>
+      </div>
+      <div class="home-path-panel" role="tabpanel" id="home-opc" aria-labelledby="home-tab-opc" hidden>
+        <div class="home-path-intro"><h3>一个人起步，先把外贸路径理顺</h3>
+          <p>${esc(opc.intro)}</p>${link(serviceRoute(opc), '查看个人创业服务')}</div>
+        <ol class="home-opc-jobs">${opc.jobs.map(([symbol, title, text]) => `<li><h4>${icon(symbol)}${esc(title)}</h4><p>${esc(text)}</p></li>`).join('')}</ol>
+      </div>
+    </div></section>
+
+    <section class="home-block home-aftercare" aria-labelledby="home-aftercare-title"><div class="wrap">
+      <div class="home-heading"><h2 id="home-aftercare-title">开通之后，服务还会继续</h2>
+        <p>常态培训、实操交流，也帮客户对接外贸业务员与运营岗位。</p></div>
+      <div class="home-aftercare-grid">
+        <figure class="home-training">
+          <img src="${asset('news-ai-tuesday-20261110-02.webp')}" width="1280" height="960"
+            alt="金品汇南昌办公室实操交流现场，讲师结合屏幕演示，合作商家携带电脑学习" loading="lazy" decoding="async">
+          <figcaption><h3>每周二下午，在办公室一起做实操</h3>
+            <p>围绕店铺经营、客户开发与工具使用开展交流，具体场次安排见新闻中心。</p>
+            ${link('/news', '查看实操活动')}</figcaption>
+        </figure>
+        <div class="home-support"><h3>产品培训与岗位招聘</h3>
+          <p>按客户当前需求安排产品培训，协助招聘外贸业务员和运营人员。</p>
+          <a class="home-support-link" href="/contact${interestQuery('售后产品培训')}">${icon('book-2')}
+            <div><strong>常态产品培训</strong><p>规格、用途、报价与常见客户问题。</p></div>${icon('arrow-up-right')}</a>
+          ${recruitmentRoles.map(role => `<a class="home-support-link" href="/contact${interestQuery(role.interest)}">${icon(role.icon)}
+            <div><strong>协助招聘${esc(role.name)}</strong><p>${esc(role.responsibility)}</p></div>${icon('arrow-up-right')}</a>`).join('')}
+          ${link(serviceRoute(afterSales), '了解售后服务内容')}
+        </div>
+      </div>
+    </div></section>
+
+    <section class="home-block" aria-labelledby="home-industry-title"><div class="wrap">
+      <div class="home-heading"><h2 id="home-industry-title">围绕行业特点，安排出海工作</h2>
+        <p>机械设备、建材、五金、家具与陶瓷，产品表达和客户沟通各有重点。</p></div>
+      <div class="home-industry-list">${industries.map(industry => `<a class="home-industry-link" href="${href(industryRoute(industry))}">
+        ${photo(industry.photo)}<h3>${esc(industry.name)}${icon('arrow-up-right')}</h3><p>${esc(industry.phrase)}</p>
+      </a>`).join('')}</div>
+      <div class="home-industry-more">${link('/industries', '查看全部行业方案')}</div>
+    </div></section>
+
+    <section class="home-block home-reading" aria-labelledby="home-reading-title"><div class="wrap">
+      <div class="home-heading"><h2 id="home-reading-title">服务动态与外贸实务</h2>
+        <p>看看本地活动与服务进展，也读一读店铺经营中的具体问题。</p></div>
+      <div class="home-reading-grid">
+        ${lead ? `<a class="home-news-card" href="${href(lead.route)}">${articlePhoto(lead)}
+          <div class="home-news-copy"><time datetime="${esc(lead.date)}">${esc(lead.date)} · 公司新闻</time>
+            <h3>${esc(lead.title)}</h3><p>${esc(lead.summary)}</p><span class="text-link">阅读新闻 ${icon('arrow-right')}</span>
+          </div></a>` : `<a class="home-news-card" href="/news"><div class="photo">
+            <img src="${asset('nanchang-office-800.webp')}" alt="南昌金品汇办公室实景" width="800" height="432" loading="lazy" decoding="async"></div>
+          <div class="home-news-copy"><span class="fine">公司新闻</span><h3>金品汇本地服务动态</h3>
+            <p>了解我们的培训、服务与活动安排。</p><span class="text-link">查看新闻中心 ${icon('arrow-right')}</span></div></a>`}
+        <div class="home-blog-list">
+          <div class="home-blog-header"><h3>出海博客</h3>${link('/blog', '查看全部')}</div>
+          ${blogItems.length ? articleList(blogItems) : '<p class="home-blog-empty">可先查看平台指南和常见问题，了解开店与经营准备。</p>'}
+          <div class="home-guide-links">${link('/platform-guide', '国际站平台指南')}${link('/faq', '常见问题')}</div>
+        </div>
+      </div>
+    </div></section>
+
+    <section class="home-block home-contact" aria-labelledby="home-contact-title"><div class="wrap home-contact-grid">
+      <div class="home-contact-copy"><h2 id="home-contact-title">一起理清下一步</h2>
+        <p>告诉我们您的产品、团队和目标，先从一次沟通开始。</p>
+        <div class="actions">${button('/contact', '联系本地顾问')}<a class="home-direct-phone num" href="tel:+86${phone}">${icon('phone')}${phone}</a></div>
+      </div>
+      <div><dl class="home-team-stats">${stats.map(([amount, unit, label]) => `<div><dt>${esc(label)}</dt><dd class="num">${esc(amount)}<span>${esc(unit)}</span></dd></div>`).join('')}</dl>
+        <a class="text-link home-team-link" href="/about">了解金品汇 ${icon('arrow-right')}</a></div>
+    </div></section>
+  </div>`;
 }
 
 function overviewArt() {
@@ -654,7 +710,7 @@ const staticPages = new Map([
   ['/', {
     title: '江西制造企业的跨境出海伙伴',
     description: company + '是阿里巴巴国际站江西本地服务商，为制造企业提供国际站入驻、运营、人才及供应链支持，也服务 OPC 个人创业者。',
-    render: home, schema: 'organization'
+    render: home, schema: 'organization', image: asset('nanchang-office-1280.webp')
   }],
   ['/services', {
     title: '服务方案', description: '了解金品汇的企业跨境电商服务、OPC 个人创业指导，以及售后产品培训和招聘支持。',
@@ -763,6 +819,7 @@ function documentFor({ route, title, description, body, url, schema, image = wor
   <title>${esc(title)}｜金品汇</title>
   <link rel="icon" href="/assets/jinpin-logo.png">
   <link rel="stylesheet" href="/assets/jph-site.css?v=${esc(revision)}">
+  ${route === '/' ? `<link rel="stylesheet" href="/assets/home.css?v=${esc(revision)}">` : ''}
   <link rel="stylesheet" href="/assets/social-qr.css?v=${esc(revision)}">
   <script src="/assets/jph-site.js?v=${esc(revision)}" defer></script>
   <script src="/assets/social-qr.js?v=${esc(revision)}" defer></script>

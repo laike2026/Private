@@ -26,7 +26,7 @@ const articleAttempts = new Map();
 const searchSettingsFile = path.join(dataDir, 'search-settings.json');
 const searchStateFile = path.join(dataDir, 'search-state.json');
 const revisionHash = crypto.createHash('sha256').update(fs.readFileSync(fileURLToPath(import.meta.url)));
-for (const file of ['_render/site.mjs', '_render/content.mjs', '_render/outline-icons.json', 'assets/jph-site.css', 'assets/jph-site.js', 'assets/social-qr.css', 'assets/social-qr.js']) {
+for (const file of ['_render/site.mjs', '_render/content.mjs', '_render/outline-icons.json', 'assets/jph-site.css', 'assets/jph-site.js', 'assets/social-qr.css', 'assets/social-qr.js', 'assets/home.css']) {
   revisionHash.update(fs.readFileSync(path.join(publicDir, file)));
 }
 const sourceRevision = revisionHash.digest('hex');
