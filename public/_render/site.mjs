@@ -87,18 +87,20 @@ function header(route) {
   </div></header>`;
 }
 function footer() {
-  const group = (title, entries) => `<div><h3>${title}</h3><div class="footer-links">${entries.map(([route, name]) => `<a href="${href(route)}">${esc(name)}</a>`).join('')}</div></div>`;
+  const group = (title, entries) => `<div class="footer-link-group"><h3>${title}</h3><div class="footer-links">${entries.map(([route, name]) => `<a href="${href(route)}">${esc(name)}</a>`).join('')}</div></div>`;
   return `<footer class="footer"><div class="wrap">
-    <div class="footer-grid">
-      <div>${brand()}<p>阿里巴巴国际站江西本地服务商</p>
+    <div class="footer-layout">
+      <div class="footer-contact">${brand()}<p>阿里巴巴国际站江西本地服务商</p>
         <a class="footer-phone num" href="tel:+86${phone}">${icon('phone')}${phone}</a>
-        <p class="footer-address">${address}</p>
+        <p class="footer-address">${icon('map-pin')}<span>${esc(address).replace('湖坊镇', '<br>湖坊镇')}</span></p>
       </div>
-      ${group('服务方案', [...services, ...extraServices].map(s => [serviceRoute(s), s.name]))}
-      ${group('行业与资讯', [['/industries', '行业方案'], ['/cases', '服务实践'], ['/news', '新闻中心'], ['/blog', '出海博客']])}
-      ${group('关于与帮助', [['/about', '关于金品汇'], ['/platform-guide', '平台指南'], ['/faq', '常见问题'], ['/contact', '联系我们']])}
+      <nav class="footer-nav" aria-label="页脚导航">
+        ${group('服务方案', [...services, ...extraServices].map(s => [serviceRoute(s), s.name]))}
+        ${group('行业与资讯', [['/industries', '行业方案'], ['/cases', '服务实践'], ['/news', '新闻中心'], ['/blog', '出海博客']])}
+        ${group('关于与帮助', [['/about', '关于金品汇'], ['/platform-guide', '平台指南'], ['/faq', '常见问题'], ['/contact', '联系我们']])}
+      </nav>
+      ${socialFooter()}
     </div>
-    ${socialFooter()}
     <div class="footer-bottom">
       <span>© ${new Date().getFullYear()} ${company}</span>
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026019255号-3</a>

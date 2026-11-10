@@ -26,6 +26,17 @@
 .social-qr-card strong { margin: 2px 0 0; font-size: 14px; line-height: 1.3; }
 .social-qr-card span { color: #506071; font-size: 12px; line-height: 1.3; }
 .social-footer .social-qr-card:hover { border-color: #ff914f; }
+.footer .social-footer { grid-template-columns: minmax(0,1fr); align-items: start; gap: 12px; padding: 0; border: 0; }
+.footer .social-footer-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; }
+.footer .social-footer-heading h2 { margin: 0; font-size: 15px; line-height: 1.7; letter-spacing: 0; }
+.footer .social-footer .social-footer-heading p { margin: 0; color: #c7d5e1; font-size: 12px; line-height: 1.7; }
+.footer .social-footer .social-footer-heading p:last-child { flex-basis: 100%; font-weight: 400; }
+.footer .social-qr-cards { gap: 10px; }
+.footer .social-footer .social-qr-card { padding: 0; gap: 5px; border: 0; background: transparent; color: #fff; }
+.footer .social-qr-card img { padding: 7px; border: 1px solid #edf2f5; border-radius: 6px; }
+.footer .social-qr-card strong { font-size: 13px; }
+.footer .social-qr-card span { color: #c7d5e1; font-size: 12px; }
+.footer .social-qr-card:hover img { border-color: #ffad7c; }
 .social-qr-card:focus-visible, .social-qr-dialog :focus-visible { outline: 3px solid #e76624; outline-offset: 4px; }
 .social-qr-dialog {
   width: min(420px, calc(100% - 32px));
@@ -59,9 +70,14 @@
   color: #fff; background: #a93b08; font-size: 14px; font-weight: 700; text-decoration: none;
 }
 .event-footer .social-footer { border-top: 0; }
+@media (max-width: 1080px) {
+  .footer .social-footer { grid-column: 1/-1; grid-template-columns: minmax(0,1fr) minmax(0,430px); align-items: center; column-gap: 24px; padding-top: 20px; border-top: 1px solid #41556a; }
+}
 @media (max-width: 720px) {
   .social-footer { grid-template-columns: minmax(0, 1fr); gap: 17px; padding-block: 23px; }
   .social-qr-cards { width: min(100%, 480px); gap: 9px; }
   .social-footer .social-qr-card { padding: 7px 7px 10px; }
   .social-qr-dialog-content { padding: 18px; }
+  .footer .social-footer { grid-template-columns: minmax(0,1fr); gap: 14px; }
+  .footer .social-qr-cards { width: min(100%,430px); }
 }
